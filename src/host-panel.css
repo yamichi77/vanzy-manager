@@ -1,0 +1,126 @@
+.host-panel {
+  margin: 22px auto;
+  width: min(1400px, calc(100% - 40px));
+  padding: 22px;
+  border: 1px solid var(--line3);
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  box-sizing: border-box;
+}
+.host-panel h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.host-panel p {
+  color: var(--text2);
+  line-height: 1.75;
+}
+.host-panel .host-note {
+  background: var(--info-soft);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.host-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.host-slots fieldset {
+  min-width: 0;
+  border: 1px solid var(--line3);
+  border-radius: 10px;
+  padding: 14px;
+}
+.host-slots legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+.host-slots label {
+  display: block;
+  font-size: 13px;
+}
+.host-slots input {
+  margin-right: 5px;
+}
+.host-modifiers {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+.host-panel select {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 7px;
+  background: var(--raised);
+  color: var(--text);
+  border: 1px solid var(--line3);
+  border-radius: 6px;
+}
+.host-panel small {
+  color: var(--text2);
+  font-size: 12px;
+}
+.host-panel .host-raw {
+  overflow-wrap: anywhere;
+  font-family: monospace;
+  font-size: 12px;
+}
+.host-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.host-panel button {
+  font: inherit;
+  font-size: 13px;
+  background: var(--raised);
+  color: var(--text);
+  border: 1px solid var(--line3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.host-panel button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.host-panel button:not(:disabled):hover {
+  border-color: var(--accent);
+}
+.host-panel .host-error {
+  color: #e98181;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 10px;
+}
+.host-panel :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.host-calibration {
+  margin: 18px 0;
+  border: 1px solid var(--line3);
+  border-radius: 10px;
+  padding: 16px;
+}
+.host-calibration h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.host-calibration select {
+  max-width: 360px;
+}
+.host-calibration small {
+  display: block;
+  margin-top: 8px;
+}
+.host-calibration ul {
+  padding-left: 22px;
+  color: var(--text2);
+  line-height: 1.8;
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-read-snapshot"
+description = "Enables the device_read_snapshot command without any pre-configured scope."
+commands.allow = ["device_read_snapshot"]
+
+[[permission]]
+identifier = "deny-device-read-snapshot"
+description = "Denies the device_read_snapshot command without any pre-configured scope."
+commands.deny = ["device_read_snapshot"]

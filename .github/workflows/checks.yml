@@ -1,0 +1,28 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run test:native-contract
+      - run: npm run build
+      - name: Betterleaks v1.10.1 (verified official release)
+        shell: bash
+        run: |
+          curl --fail --location --output /tmp/betterleaks.tar.gz https://github.com/betterleaks/betterleaks/releases/download/v1.10.1/betterleaks_1.10.1_linux_x64.tar.gz
+          echo 'c174b42d7aa60caf58c0c3e555c0e4bed01fe6b0d99a412bce777b5af4ce913e  /tmp/betterleaks.tar.gz' | sha256sum --check
+          mkdir /tmp/betterleaks-bin
+          tar -xzf /tmp/betterleaks.tar.gz -C /tmp/betterleaks-bin
+          /tmp/betterleaks-bin/betterleaks dir . --redact --no-banner
+          /tmp/betterleaks-bin/betterleaks git . --redact --no-banner

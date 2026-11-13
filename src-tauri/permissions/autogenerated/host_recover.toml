@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-recover"
+description = "Enables the host_recover command without any pre-configured scope."
+commands.allow = ["host_recover"]
+
+[[permission]]
+identifier = "deny-host-recover"
+description = "Denies the host_recover command without any pre-configured scope."
+commands.deny = ["host_recover"]

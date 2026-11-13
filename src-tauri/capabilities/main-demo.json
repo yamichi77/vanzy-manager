@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-demo",
+  "description": "Local demo plus explicit Windows verified keymap operations. No general shell or device access.",
+  "local": true,
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-get-runtime-capabilities",
+    "allow-request-hardware-operation",
+    "allow-device-read-snapshot",
+    "allow-device-apply-map",
+    "allow-device-apply-batch",
+    "allow-device-cancel-batch",
+    "allow-device-restore-previous",
+    "allow-host-start",
+    "allow-host-stop",
+    "allow-host-status",
+    "allow-host-recover"
+  ]
+}

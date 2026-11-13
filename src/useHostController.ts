@@ -1,0 +1,394 @@
+/** Host ("アプリ経由") session control for the native UI, extracted from HostPanel.
+ * Same guards: explicit start/stop/recover only, one operation at a time, fail closed
+ * when status cannot be confirmed, and stored data never authorizes a device write. */
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MutableRefObject } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import type { DeviceSnapshot } from "./DevicePanel";
+import type { HostBinding, HostStatus } from "./HostPanel";
+
+export const PHYSICAL_NAMES = [
+  "左",
+  "右",
+  "上",
+  "下",
+  "反時計回り",
+  "時計回り",
+  "前方",
+  "左スワイプ",
+  "右スワイプ",
+  "左タッチ",
+  "右タッチ",
+  "○印側へスワイプ",
+  "○印と反対側へスワイプ",
+  "○印側タッチ",
+  "○印と反対側タッチ",
+] as const;
+
+export const slotReference = (index: number) =>
+  index <= 7
+    ? `枠${index} / 0x44・設定${index}`
+    : `枠${index} / 0x4B・設定${[0, 3, 7, 8][index - 8]}`;
+
+function parseStatus(value: unknown): HostStatus {
+  const s = value as HostStatus;
+  if (
+    !s ||
+    typeof s.active !== "boolean" ||
+    typeof s.phase !== "string" ||
+    !Number.isInteger(s.eventCount) ||
+    s.eventCount < 0 ||
+    (s.restored != null && typeof s.restored !== "boolean") ||
+    (s.runtimeMode != null &&
+      (!Number.isInteger(s.runtimeMode) ||
+        s.runtimeMode < 0 ||
+        s.runtimeMode > 255)) ||
+    (s.modeReadAt != null && !Number.isFinite(Date.parse(s.modeReadAt))) ||
+    (s.lastReceivedAt != null && !Number.isFinite(Date.parse(s.lastReceivedAt)))
+  )
+    throw new Error("アプリ経由の送信の状態を確認できません。");
+  return s;
+}
+
+const validProfile = (raw: unknown): raw is HostBinding[] =>
+  Array.isArray(raw) &&
+  raw.length <= 11 &&
+  new Set(raw.map((b) => b?.index)).size === raw.length &&
+  raw.every(
+    (b) =>
+      Number.isInteger(b.index) &&
+      b.index >= 1 &&
+      b.index <= 11 &&
+      Array.isArray(b.keys) &&
+      b.keys.length <= 6 &&
+      b.keys.every(
+        (v: unknown) =>
+          Number.isInteger(v) && Number(v) >= 4 && Number(v) <= 0x65,
+      ) &&
+      Number.isInteger(b.modifiers) &&
+      b.modifiers >= 0 &&
+      b.modifiers <= 15 &&
+      (b.keys.length > 0 || b.modifiers === 8),
+  );
+
+type Options = {
+  /** `${deviceId}:${touchInverted}` of the last verified read, kept while sending. */
+  identity: string;
+  externalBusy: boolean;
+  operationLock: MutableRefObject<boolean>;
+  onInvalidate: () => void;
+};
+
+export function useHostController({
+  identity,
+  externalBusy,
+  operationLock,
+  onInvalidate,
+}: Options) {
+  const native = isTauri() && /Windows/i.test(navigator.userAgent);
+  const [status, setStatus] = useState<HostStatus | null>(null);
+  const [known, setKnown] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [profile, setProfile] = useState<HostBinding[]>([]);
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  const [observing, setObserving] = useState(false);
+  const [savedEvent, setSavedEvent] = useState(0);
+  const [calibrationNotice, setCalibrationNotice] = useState("");
+  const lock = useRef(false);
+  const mounted = useRef(true);
+  const labelKey = useRef("");
+  const profileKey = useRef("");
+  const consumedEvent = useRef(0);
+  const calibrationSession = useRef(false);
+
+  const refresh = useCallback(async () => {
+    const next = parseStatus(await invoke("host_status"));
+    if (mounted.current) {
+      setStatus(next);
+      setKnown(true);
+    }
+    return next;
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    if (native)
+      void refresh().catch((cause) => {
+        if (mounted.current) {
+          setKnown(false);
+          setError(String(cause));
+        }
+      });
+    return () => {
+      mounted.current = false;
+    };
+  }, [native, refresh]);
+
+  useEffect(() => {
+    if (!native || !status?.active) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        if (!lock.current) await refresh();
+      } catch (cause) {
+        if (!cancelled) {
+          setKnown(false);
+          setError(String(cause));
+        }
+      }
+      if (!cancelled) timer = setTimeout(poll, 1500);
+    };
+    timer = setTimeout(poll, 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [native, status?.active, refresh]);
+
+  // Physical names belong to one device and inversion state; never reload mid-session.
+  useEffect(() => {
+    if (!identity || status?.active) return;
+    const key = `vanzy-physical-labels:${identity}`;
+    if (labelKey.current === key) return;
+    labelKey.current = key;
+    setLabels({});
+    setSavedEvent(0);
+    consumedEvent.current = 0;
+    setCalibrationNotice("");
+    calibrationSession.current = false;
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem(key) ?? "{}");
+      if (!raw || Array.isArray(raw) || typeof raw !== "object") return;
+      const entries = Object.entries(raw);
+      if (
+        entries.length <= 11 &&
+        entries.every(
+          ([id, name]) =>
+            /^(?:[1-9]|10|11)$/.test(id) &&
+            PHYSICAL_NAMES.some((n) => n === name),
+        ) &&
+        new Set(entries.map(([, name]) => name)).size === entries.length
+      )
+        setLabels(Object.fromEntries(entries) as Record<string, string>);
+    } catch {
+      setCalibrationNotice(
+        "保存済みの名前を読み込めませんでした。割り当ては変更していません。",
+      );
+    }
+  }, [identity, status?.active]);
+
+  useEffect(() => {
+    if (!identity) return;
+    const key = `vanzy-host-profile:${identity}`;
+    if (profileKey.current === key) return;
+    profileKey.current = key;
+    setProfile([]);
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
+      if (validProfile(raw)) setProfile(raw);
+    } catch {
+      /* Invalid saved bindings never authorize a device write. */
+    }
+  }, [identity]);
+
+  const active = !!status?.active;
+  const restoreFailed =
+    !active &&
+    (status?.restored === false || status?.phase === "restore-unconfirmed");
+  const blocked = busy || !known || active || restoreFailed;
+
+  const saveProfile = useCallback((next: HostBinding[]) => {
+    if (!profileKey.current || !validProfile(next)) return false;
+    try {
+      localStorage.setItem(profileKey.current, JSON.stringify(next));
+      setProfile(next);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  /** Returns the confirmed status after a successful command, or null. */
+  async function run(work: () => Promise<unknown>): Promise<HostStatus | null> {
+    lock.current = true;
+    operationLock.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await work();
+      onInvalidate();
+      return await refresh();
+    } catch (cause) {
+      onInvalidate();
+      if (mounted.current) {
+        setKnown(false);
+        setError(String(cause));
+      }
+      try {
+        await refresh();
+      } catch (statusCause) {
+        if (mounted.current)
+          setError(`${String(cause)} 状態の確認も失敗: ${String(statusCause)}`);
+      }
+      return null;
+    } finally {
+      lock.current = false;
+      operationLock.current = false;
+      if (mounted.current) setBusy(false);
+    }
+  }
+
+  const free = () =>
+    native && !lock.current && !operationLock.current && !externalBusy;
+
+  /** Starts sending for the given bindings. `observe` sends no keys (name matching only). */
+  async function start(
+    snapshot: DeviceSnapshot | null,
+    bindings: HostBinding[],
+    {
+      observe = false,
+      confirm = true,
+      fromSave = false,
+    }: { observe?: boolean; confirm?: boolean; fromSave?: boolean } = {},
+  ) {
+    // The save dialog already holds the shared lock and releases it just before this call.
+    const available = fromSave
+      ? native && !lock.current && !operationLock.current
+      : free();
+    if (!available || !snapshot || blocked || !bindings.length) return false;
+    if (!observe && !validProfile(bindings)) return false;
+    if (
+      confirm &&
+      !window.confirm(
+        observe
+          ? "名前合わせのため、11操作を一時的に通知用へ切り替えます。キーは送りません。終了すると元に戻します。始めますか？"
+          : `${bindings.length}件の動きを一時的に通知用へ切り替え、このアプリが同時押しをPCへ送ります。アプリを開いている間だけ動き、停止すると元に戻します。開始しますか？`,
+      )
+    )
+      return false;
+    labelKey.current = `vanzy-physical-labels:${snapshot.deviceId}:${snapshot.touchInverted}`;
+    calibrationSession.current = observe;
+    consumedEvent.current = 0;
+    setSavedEvent(0);
+    setCalibrationNotice("");
+    setObserving(observe);
+    const next = await run(() =>
+      invoke("host_start", {
+        snapshotId: snapshot.snapshotId,
+        bindings: observe
+          ? bindings.map((b) => ({ index: b.index, keys: [], modifiers: 0 }))
+          : bindings,
+        observeOnly: observe,
+      }),
+    );
+    return !!next;
+  }
+
+  async function stop({ confirm = true }: { confirm?: boolean } = {}) {
+    if (!native || lock.current || operationLock.current || externalBusy) return null;
+    if (
+      confirm &&
+      !window.confirm("アプリ経由の送信を止めて、本体の割り当てを元に戻しますか？")
+    )
+      return null;
+    return run(() => invoke("host_stop"));
+  }
+
+  async function recover() {
+    if (!free() || active) return null;
+    if (
+      !window.confirm(
+        "中断した送信のバックアップを読み、通知用のまま残った本体の割り当てを元に戻しますか？",
+      )
+    )
+      return null;
+    return run(() => invoke("host_recover"));
+  }
+
+  async function recheck() {
+    if (lock.current) return;
+    try {
+      await refresh();
+      setError("");
+    } catch (cause) {
+      setKnown(false);
+      setError(String(cause));
+    }
+  }
+
+  const canCalibrate =
+    native &&
+    known &&
+    !busy &&
+    active &&
+    observing &&
+    calibrationSession.current &&
+    !!labelKey.current &&
+    status?.lastGesture != null &&
+    status.lastGesture >= 1 &&
+    status.lastGesture <= 11 &&
+    status.eventCount > savedEvent;
+
+  function saveCalibration(physicalName: string) {
+    if (
+      !canCalibrate ||
+      !status ||
+      status.lastGesture == null ||
+      status.eventCount <= consumedEvent.current
+    )
+      return;
+    const index = String(status.lastGesture);
+    const previous = Object.entries(labels).find(
+      ([id, name]) => name === physicalName && id !== index,
+    )?.[0];
+    if (
+      previous &&
+      !window.confirm(
+        `${physicalName}は${slotReference(Number(previous))}に登録済みです。今回受信した${slotReference(Number(index))}へ移しますか？`,
+      )
+    )
+      return;
+    const next = { ...labels };
+    if (previous) delete next[previous];
+    next[index] = physicalName;
+    try {
+      localStorage.setItem(labelKey.current, JSON.stringify(next));
+      setLabels(next);
+      consumedEvent.current = status.eventCount;
+      setSavedEvent(status.eventCount);
+      setCalibrationNotice(
+        `${physicalName}を${slotReference(Number(index))}へ保存しました。次の動きをどうぞ。`,
+      );
+    } catch {
+      setCalibrationNotice(
+        "名前を保存できませんでした。端末の保存領域を確認してください。",
+      );
+    }
+  }
+
+  return {
+    native,
+    status,
+    known,
+    busy,
+    error: error || status?.error || "",
+    active,
+    observing: active && observing,
+    restoreFailed,
+    blocked,
+    profile,
+    saveProfile,
+    labels,
+    start,
+    stop,
+    recover,
+    recheck,
+    canCalibrate,
+    saveCalibration,
+    calibrationNotice,
+  };
+}
+export type HostController = ReturnType<typeof useHostController>;

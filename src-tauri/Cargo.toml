@@ -1,0 +1,28 @@
+[package]
+name = "vanzy-manager"
+version = "0.2.0"
+description = "VANZY Manager with guarded Windows keymap access"
+edition = "2021"
+rust-version = "1.77.2"
+publish = false
+
+[lib]
+name = "vanzy_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.12.5", features = [] }
+serde = { version = "1", features = ["derive"] }
+vanzy-safety-core = { path = "safety-core" }
+
+
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse"] }

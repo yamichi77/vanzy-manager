@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-request-hardware-operation"
+description = "Enables the request_hardware_operation command without any pre-configured scope."
+commands.allow = ["request_hardware_operation"]
+
+[[permission]]
+identifier = "deny-request-hardware-operation"
+description = "Denies the request_hardware_operation command without any pre-configured scope."
+commands.deny = ["request_hardware_operation"]

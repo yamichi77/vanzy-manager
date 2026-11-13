@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-cancel-batch"
+description = "Enables the device_cancel_batch command without any pre-configured scope."
+commands.allow = ["device_cancel_batch"]
+
+[[permission]]
+identifier = "deny-device-cancel-batch"
+description = "Denies the device_cancel_batch command without any pre-configured scope."
+commands.deny = ["device_cancel_batch"]
