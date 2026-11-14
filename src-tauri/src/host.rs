@@ -12,7 +12,12 @@ pub struct HostStatus { active:bool, phase:String, error:Option<String>, restore
 struct Session { input:Option<std::process::ChildStdin>,status:Arc<Mutex<HostStatus>> }
 #[derive(Default)]
 pub struct HostState(Mutex<Option<Session>>);
-fn check(window:&tauri::WebviewWindow)->Result<(),String>{if window.label()!="main"||!cfg!(target_os="windows"){return Err("Host conversion requires the local Windows window".into())}Ok(())}
+fn check(window:&tauri::WebviewWindow)->Result<(),String>{if window.label()!="main"||!cfg!(any(target_os="windows",target_os="macos")){return Err("Host conversion requires the local Windows or macOS window".into())}Ok(())}
+#[tauri::command]
+pub fn host_input_permission(window: tauri::WebviewWindow, request: bool) -> Result<bool, String> {
+    check(&window)?;
+    host_input::input_permission(request)
+}
 #[tauri::command]
 pub fn host_status(window:tauri::WebviewWindow,app:tauri::AppHandle)->Result<HostStatus,String>{check(&window)?;let state=app.state::<HostState>();let guard=state.0.lock().map_err(|_|"Host state unavailable")?;match guard.as_ref(){Some(s)=>Ok(s.status.lock().map_err(|_|"Host status unavailable")?.clone()),None=>Ok(HostStatus{phase:"stopped".into(),..Default::default()})}}
 #[tauri::command]
@@ -29,10 +34,11 @@ pub fn is_active(app:&tauri::AppHandle)->bool {
 #[tauri::command]
 pub fn host_start(window:tauri::WebviewWindow,app:tauri::AppHandle,snapshot_id:String,bindings:Vec<HostBinding>,observe_only:Option<bool>)->Result<HostStatus,String>{
  check(&window)?;
- #[cfg(not(target_os="windows"))]{let _=(app,snapshot_id,bindings,observe_only);Err("Windows only".into())}
- #[cfg(target_os="windows")]{
- use std::os::windows::process::CommandExt;
+ #[cfg(not(any(target_os="windows",target_os="macos")))]{let _=(app,snapshot_id,bindings,observe_only);Err("Windows only".into())}
+ #[cfg(any(target_os="windows",target_os="macos"))]{
  let observe_only=observe_only.unwrap_or(false);
+ #[cfg(target_os="macos")]
+ if !observe_only {host_input::ensure_input_permission()?;}
  if bindings.is_empty()||bindings.len()>11{return Err("Choose one to eleven analyzed gesture slots".into())}
  let mut seen=std::collections::HashSet::new();for b in &bindings{if !(1..=11).contains(&b.index)||!seen.insert(b.index){return Err("Invalid or repeated gesture".into())}if !observe_only {host_input::validate_chord(&b.keys,b.modifiers)?;}}
  let hs=app.state::<HostState>();let mut host=hs.0.lock().map_err(|_|"Host state unavailable")?;
@@ -42,8 +48,7 @@ pub fn host_start(window:tauri::WebviewWindow,app:tauri::AppHandle,snapshot_id:S
  if before.snapshot_id!=snapshot_id{return Err("Stale snapshot; read device again".into())}
  let dir=app.path().app_data_dir().map_err(|e|e.to_string())?.join("device-backups");std::fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
  let request=serde_json::json!({"deviceId":before.device_id,"expectedProduct":before.product,"backupDirectory":dir,"expectedMaps":before.maps,"expectedTouchInverted":before.touch_inverted,"bindings":bindings.iter().map(|b|serde_json::json!({"index":b.index,"id":b.index})).collect::<Vec<_>>()});
- let executable=std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("Missing SystemRoot")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
- let mut child=std::process::Command::new(executable).args(["-NoLogo","-NoProfile","-NonInteractive","-Command",include_str!("../transport/vanzy-host.ps1")]).env("VANZY_HOST_REQUEST",request.to_string()).creation_flags(0x08000000).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e|e.to_string())?;
+ let mut child=worker_command(&app)?.env("VANZY_HOST_REQUEST",request.to_string()).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e|e.to_string())?;
  let input=child.stdin.take().ok_or("Missing worker input")?;let output=child.stdout.take().ok_or("Missing worker output")?;let error=child.stderr.take().ok_or("Missing worker error")?;
  device.current=None;
  let status=Arc::new(Mutex::new(HostStatus{active:true,phase:"starting".into(),..Default::default()}));let shared=status.clone();
@@ -76,9 +81,8 @@ pub fn host_start(window:tauri::WebviewWindow,app:tauri::AppHandle,snapshot_id:S
 #[tauri::command]
 pub fn host_recover(window:tauri::WebviewWindow,app:tauri::AppHandle)->Result<HostStatus,String>{
  check(&window)?;
- #[cfg(not(target_os="windows"))]{let _=app;Err("Windows only".into())}
- #[cfg(target_os="windows")]{
- use std::os::windows::process::CommandExt;
+ #[cfg(not(any(target_os="windows",target_os="macos")))]{let _=app;Err("Windows only".into())}
+ #[cfg(any(target_os="windows",target_os="macos"))]{
  let state=app.state::<HostState>();let mut session=state.0.lock().map_err(|_|"Host state unavailable")?;
  if session.as_ref().is_some_and(|s|s.status.lock().map(|v|v.active).unwrap_or(true)){return Err("Stop the current session before recovery".into())}
  let directory=app.path().app_data_dir().map_err(|e|e.to_string())?.join("device-backups");
@@ -88,8 +92,7 @@ pub fn host_recover(window:tauri::WebviewWindow,app:tauri::AppHandle)->Result<Ho
  let mut device=device_state.0.try_lock().map_err(|_|"Another device operation is running")?;
  let (path,record)=pending.pop().unwrap();let device_id=record["deviceId"].as_str().ok_or("Recovery device identity missing")?;
  let request=serde_json::json!({"operation":"recover","deviceId":device_id,"backupDirectory":directory,"recoveryPath":path});
- let executable=std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("Missing SystemRoot")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
- let mut child=std::process::Command::new(executable).args(["-NoLogo","-NoProfile","-NonInteractive","-Command",include_str!("../transport/vanzy-host.ps1")]).env("VANZY_HOST_REQUEST",request.to_string()).creation_flags(0x08000000).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().map_err(|e|e.to_string())?;
+ let mut child=worker_command(&app)?.env("VANZY_HOST_REQUEST",request.to_string()).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn().map_err(|e|e.to_string())?;
  let output=child.stdout.take().ok_or("Missing recovery output")?;
  let status=Arc::new(Mutex::new(HostStatus{active:true,phase:"restoring".into(),..Default::default()}));let shared=status.clone();*session=Some(Session{input:None,status});
  device.current=None;
@@ -99,3 +102,14 @@ pub fn host_recover(window:tauri::WebviewWindow,app:tauri::AppHandle)->Result<Ho
 }
 
 
+
+#[cfg(target_os="windows")]
+fn worker_command(_: &tauri::AppHandle)->Result<std::process::Command,String>{
+ use std::os::windows::process::CommandExt;
+ let executable=std::path::PathBuf::from(std::env::var_os("SystemRoot").ok_or("Missing SystemRoot")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+ let mut command=std::process::Command::new(executable);
+ command.args(["-NoLogo","-NoProfile","-NonInteractive","-Command",include_str!("../transport/vanzy-host.ps1")]).creation_flags(0x08000000);
+ Ok(command)
+}
+#[cfg(target_os="macos")]
+fn worker_command(app:&tauri::AppHandle)->Result<std::process::Command,String>{crate::mac_worker::command(app,true)}

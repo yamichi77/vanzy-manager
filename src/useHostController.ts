@@ -1,3 +1,4 @@
+import { isMacHost, nativePlatform } from "./native-platform";
 /** Host ("アプリ経由") session control for the native UI, extracted from HostPanel.
  * Same guards: explicit start/stop/recover only, one operation at a time, fail closed
  * when status cannot be confirmed, and stored data never authorizes a device write. */
@@ -77,6 +78,7 @@ type Options = {
   externalBusy: boolean;
   operationLock: MutableRefObject<boolean>;
   onInvalidate: () => void;
+  confirmAction?: (message: string) => Promise<boolean>;
 };
 
 export function useHostController({
@@ -84,12 +86,16 @@ export function useHostController({
   externalBusy,
   operationLock,
   onInvalidate,
+  confirmAction,
 }: Options) {
-  const native = isTauri() && /Windows/i.test(navigator.userAgent);
+  const ask = (message: string) => confirmAction ? confirmAction(message) : Promise.resolve(window.confirm(message));
+  const native = nativePlatform(isTauri(), navigator.platform) !== null;
   const [status, setStatus] = useState<HostStatus | null>(null);
   const [known, setKnown] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [permissionNotice, setPermissionNotice] = useState("");
+  const permissionRequested = useRef(false);
   const [profile, setProfile] = useState<HostBinding[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [observing, setObserving] = useState(false);
@@ -244,6 +250,26 @@ export function useHostController({
   const free = () =>
     native && !lock.current && !operationLock.current && !externalBusy;
 
+  // Called only by explicit Read/Send actions, not on mount or focus.
+  async function checkInputPermission(request: boolean): Promise<boolean> {
+    if (!native || !isMacHost()) return true;
+    setPermissionNotice("");
+    try {
+      let allowed: unknown = await invoke("host_input_permission", { request: false });
+      if (typeof allowed !== "boolean") throw new Error("許可状態を確認できません。");
+      if (!allowed && request && !permissionRequested.current) {
+        permissionRequested.current = true;
+        allowed = await invoke("host_input_permission", { request: true });
+        if (typeof allowed !== "boolean") throw new Error("許可状態を確認できません。");
+      }
+      if (!allowed) setPermissionNotice("キー送信は未許可です。macOSの案内またはシステム設定でアクセシビリティを許可後、もう一度「送信を開始」を押してください。案内が未表示なら「本体を読み取る」から確認できます。本体の読取りは続行できます。キー送信・本体設定の変更は開始していません。");
+      return allowed;
+    } catch (cause) {
+      setPermissionNotice(`キー送信の許可を確認できません: ${String(cause)} 本体の読取りは続行できます。`);
+      return false;
+    }
+  }
+
   /** Starts sending for the given bindings. `observe` sends no keys (name matching only). */
   async function start(
     snapshot: DeviceSnapshot | null,
@@ -262,13 +288,23 @@ export function useHostController({
     if (!observe && !validProfile(bindings)) return false;
     if (
       confirm &&
-      !window.confirm(
+      !(await ask(
         observe
           ? "名前合わせのため、11操作を一時的に通知用へ切り替えます。キーは送りません。終了すると元に戻します。始めますか？"
           : `${bindings.length}件の動きを一時的に通知用へ切り替え、このアプリが同時押しをPCへ送ります。アプリを開いている間だけ動き、停止すると元に戻します。開始しますか？`,
-      )
+      ))
     )
       return false;
+    if (!mounted.current || lock.current || operationLock.current) return false;
+    if (isMacHost() && !observe) {
+      lock.current = true;
+      operationLock.current = true;
+      setBusy(true);
+      let allowed = false;
+      try { allowed = await checkInputPermission(false); }
+      finally { lock.current = false; operationLock.current = false; if (mounted.current) setBusy(false); }
+      if (!allowed || !mounted.current) return false;
+    }
     labelKey.current = `vanzy-physical-labels:${snapshot.deviceId}:${snapshot.touchInverted}`;
     calibrationSession.current = observe;
     consumedEvent.current = 0;
@@ -291,20 +327,22 @@ export function useHostController({
     if (!native || lock.current || operationLock.current || externalBusy) return null;
     if (
       confirm &&
-      !window.confirm("アプリ経由の送信を止めて、本体の割り当てを元に戻しますか？")
+      !(await ask("アプリ経由の送信を止めて、本体の割り当てを元に戻しますか？"))
     )
       return null;
+    if (!mounted.current || lock.current || operationLock.current) return null;
     return run(() => invoke("host_stop"));
   }
 
   async function recover() {
     if (!free() || active) return null;
     if (
-      !window.confirm(
+      !(await ask(
         "中断した送信のバックアップを読み、通知用のまま残った本体の割り当てを元に戻しますか？",
-      )
+      ))
     )
       return null;
+    if (!mounted.current || lock.current || operationLock.current) return null;
     return run(() => invoke("host_recover"));
   }
 
@@ -332,7 +370,7 @@ export function useHostController({
     status.lastGesture <= 11 &&
     status.eventCount > savedEvent;
 
-  function saveCalibration(physicalName: string) {
+  async function saveCalibration(physicalName: string) {
     if (
       !canCalibrate ||
       !status ||
@@ -346,9 +384,9 @@ export function useHostController({
     )?.[0];
     if (
       previous &&
-      !window.confirm(
+      !(await ask(
         `${physicalName}は${slotReference(Number(previous))}に登録済みです。今回受信した${slotReference(Number(index))}へ移しますか？`,
-      )
+      ))
     )
       return;
     const next = { ...labels };
@@ -389,6 +427,8 @@ export function useHostController({
     canCalibrate,
     saveCalibration,
     calibrationNotice,
+    permissionNotice,
+    checkInputPermission,
   };
 }
 export type HostController = ReturnType<typeof useHostController>;

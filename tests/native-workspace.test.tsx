@@ -51,7 +51,7 @@ beforeEach(() => {
     configurable: true,
   });
   api.invoke.mockImplementation(async (command) =>
-    command === "host_status" ? stopped : before,
+    command === "host_status" ? stopped : command === "host_input_permission" ? false : before,
   );
 });
 afterEach(() => {
@@ -887,4 +887,121 @@ it("records local test chords, matches the device key, and clears history on ges
   select("右へ");
   expect(screen.getByRole("region", { name: "実動作テスト" })).not.toHaveTextContent("Ctrl + A");
   expect(batchCalls()).toHaveLength(0);
+});
+
+
+it("Mac native workspace enables read without automatic device access or writes", async () => {
+  Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+  Object.defineProperty(navigator, "userAgent", { value: "Macintosh test", configurable: true });
+  render(<NativeApp />);
+  const button = screen.getAllByRole("button", { name: "本体を読み取る" })[0];
+  await waitFor(() => expect(button).toBeEnabled());
+  expect(screen.getByText(/macOS・実機検証前/)).toBeInTheDocument();
+  expect(screen.queryByText(/Bluetoothとキー送信用アクセシビリティ/)).not.toBeInTheDocument();
+  expect(calls("device_read_snapshot")).toHaveLength(0);
+  expect(calls("host_start")).toHaveLength(0);
+  expect(batchCalls()).toHaveLength(0);
+  await read();
+  expect(calls("device_read_snapshot")).toHaveLength(1);
+  expect(screen.getByText(/キー送信は未許可です/)).toBeInTheDocument();
+  expect(batchCalls()).toHaveLength(0);
+  expect(calls("host_start")).toHaveLength(0);
+});
+
+
+it("Mac checks permission on Read, continues when denied, and only sends after explicit allowed start", async () => {
+  Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+  let granted = false;
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  localStorage.setItem(profileKey, JSON.stringify([{ index: 1, keys: [4, 5], modifiers: 0 }]));
+  api.invoke.mockImplementation(async (command) => command === "host_status" ? stopped : command === "host_input_permission" ? granted : before);
+  render(<NativeApp />);
+  await waitFor(() => expect(api.invoke).toHaveBeenCalledWith("host_status"));
+  expect(calls("host_input_permission")).toHaveLength(0);
+  expect(screen.queryByRole("button", { name: "キー送信の許可をリクエスト" })).not.toBeInTheDocument();
+  await read();
+  expect(calls("host_input_permission")).toEqual([["host_input_permission", { request: false }], ["host_input_permission", { request: true }]]);
+  expect(calls("device_read_snapshot")).toHaveLength(1);
+  expect(calls("host_start")).toHaveLength(0);
+  const start = screen.getByRole("button", { name: "送信を開始" });
+  await waitFor(() => expect(start).toBeEnabled());
+  fireEvent.click(start);
+  expect(calls("host_start")).toHaveLength(0);
+  fireEvent.click(await screen.findByRole("button", { name: "確認して実行" }));
+  await waitFor(() => expect(calls("host_input_permission")).toHaveLength(3));
+  await waitFor(() => expect(start).toBeEnabled());
+  expect(calls("host_start")).toHaveLength(0);
+  expect(batchCalls()).toHaveLength(0);
+  granted = true;
+  fireEvent.focus(window);
+  expect(calls("host_start")).toHaveLength(0);
+  fireEvent.click(start);
+  expect(calls("host_start")).toHaveLength(0);
+  fireEvent.click(await screen.findByRole("button", { name: "確認して実行" }));
+  await waitFor(() => expect(calls("host_start")).toHaveLength(1));
+  expect(calls("host_input_permission").filter(([, args]) => args.request)).toHaveLength(1);
+});
+
+it("Mac read proceeds when the Accessibility check errors", async () => {
+  Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+  api.invoke.mockImplementation(async (command) => {
+    if (command === "host_input_permission") throw new Error("permission unavailable");
+    return command === "host_status" ? stopped : before;
+  });
+  render(<NativeApp />);
+  await read();
+  expect(calls("device_read_snapshot")).toHaveLength(1);
+  expect(calls("host_start")).toHaveLength(0);
+  expect(screen.getByText(/キー送信の許可を確認できません/)).toBeInTheDocument();
+});
+
+it("Windows never invokes Mac permission checks, including Read", async () => {
+  render(<NativeApp />);
+  await read();
+  expect(calls("host_input_permission")).toHaveLength(0);
+});
+
+
+it("explicitly focuses capture and test buttons on click for macOS WebView", async () => {
+  render(<NativeApp />);
+  await read();
+  const capture = captureButton();
+  fireEvent.click(capture);
+  expect(capture).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: /^テスト$/ }));
+  const test = screen.getByRole("button", { name: "実動作テストの入力欄" });
+  fireEvent.click(test);
+  expect(test).toHaveFocus();
+  expect(api.invoke.mock.calls.some(([command]) => command === "host_start")).toBe(false);
+});
+
+it("keeps stopped-session mode and receive count visible for diagnosis", async () => {
+  api.invoke.mockImplementation(async (command) => command === "host_status"
+    ? { ...stopped, eventCount: 3, runtimeMode: 1, restored: true }
+    : command === "host_input_permission" ? false : before);
+  render(<NativeApp />);
+  await read();
+  expect(screen.getByText(/受信 3 回/)).toHaveTextContent("最終確認モード: 1");
+  expect(screen.getByText(/受信 3 回/)).toHaveTextContent("本体設定の復元確認済み");
+  expect(calls("host_start")).toHaveLength(0);
+});
+
+
+it("Mac confirmation cancellation never starts or writes, without window.confirm", async () => {
+  Object.defineProperty(navigator, "platform", { value: "MacIntel", configurable: true });
+  const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  localStorage.setItem(profileKey, JSON.stringify([{ index: 1, keys: [4, 5], modifiers: 0 }]));
+  render(<NativeApp />);
+  await read();
+  const start = screen.getByRole("button", { name: "送信を開始" });
+  await waitFor(() => expect(start).toBeEnabled());
+  fireEvent.click(start);
+  const confirmation = await screen.findByRole("dialog", { name: "操作の確認" });
+  expect(confirmation).toHaveTextContent("1件の動きを一時的に通知用");
+  expect(calls("host_start")).toHaveLength(0);
+  fireEvent.click(within(confirmation).getByRole("button", { name: "キャンセル" }));
+  expect(screen.queryByRole("dialog", { name: "操作の確認" })).not.toBeInTheDocument();
+  expect(calls("host_start")).toHaveLength(0);
+  expect(batchCalls()).toHaveLength(0);
+  expect(nativeConfirm).not.toHaveBeenCalled();
 });

@@ -1,3 +1,4 @@
+import { nativePlatform } from "./native-platform";
 import { useEffect, useId, useRef, useState } from "react";
 import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import "./device-panel.css";
@@ -279,7 +280,7 @@ export function useDeviceController() {
       mounted.current = false;
     };
   }, []);
-  const nativeWindows = isTauri() && /Win/i.test(navigator.platform);
+  const nativeSupported = nativePlatform(isTauri(), navigator.platform) !== null;
   const current = snapshot?.maps[String(index)];
   const key = deviceKeys.find((item) => item.code === code);
   const defaultTarget = supportsFirmwareDefaults(snapshot)
@@ -311,7 +312,7 @@ export function useDeviceController() {
       ? snapshot?.maps[String(operationIndex)]
       : undefined;
     const operationTarget = restore ? snapshot?.undo?.target : target;
-    if (!nativeWindows || busyRef.current) return null;
+    if (!nativeSupported || busyRef.current) return null;
     if (
       write &&
       (!confirming ||
@@ -394,7 +395,7 @@ export function useDeviceController() {
     onProgress: (event: BatchProgress) => void,
   ): Promise<BatchResult> {
     if (
-      !nativeWindows ||
+      !nativeSupported ||
       busyRef.current ||
       !confirming ||
       !snapshot ||
@@ -504,7 +505,7 @@ export function useDeviceController() {
     setStatus,
     confirming,
     setConfirming,
-    nativeWindows,
+    nativeSupported,
     current,
     target,
     defaultTarget,
@@ -535,7 +536,7 @@ export function DevicePanel() {
     setStatus,
     confirming,
     setConfirming,
-    nativeWindows,
+    nativeSupported,
     current,
     target,
     changed,
@@ -559,9 +560,9 @@ export function DevicePanel() {
         <p>
           現在の本体設定を読み取ってから変更します。プレビュー用のサンプルやJSONは本体へ送りません。
         </p>
-        {!nativeWindows ? (
+        {!nativeSupported ? (
           <p className="device-note">
-            実機機能はWindowsネイティブ版でのみ利用できます。ブラウザー版からは接続・書込みしません。
+            実機機能はWindows・macOSネイティブ版で利用できます。ブラウザー版からは接続・書込みしません。
           </p>
         ) : (
           <>
@@ -798,7 +799,7 @@ export function DevicePanel() {
           </>
         )}
       </section>
-      {nativeWindows && (
+      {nativeSupported && (
         <HostPanel
           snapshot={snapshot}
           onInvalidate={() => {

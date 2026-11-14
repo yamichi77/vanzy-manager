@@ -10,6 +10,8 @@ import {
 import { DevicePanel, type DeviceSnapshot } from "../src/DevicePanel";
 const api = vi.hoisted(() => ({ invoke: vi.fn(), isTauri: vi.fn(() => true) }));
 vi.mock("@tauri-apps/api/core", () => api);
+// This suite isolates device transactions; host lifecycle is covered by native-workspace.
+vi.mock("../src/HostPanel", () => ({ default: () => null }));
 const raw = (usage: number) => [5, 0, usage, ...Array<number>(12).fill(0)];
 const before: DeviceSnapshot = {
   snapshotId: "snapshot-1",
@@ -42,7 +44,7 @@ afterEach(cleanup);
 it("keeps browser mode read-only and never invokes native operations", () => {
   api.isTauri.mockReturnValue(false);
   render(<DevicePanel />);
-  expect(screen.getByText(/実機機能はWindowsネイティブ版/)).toBeInTheDocument();
+  expect(screen.getByText(/実機機能はWindows・macOSネイティブ版/)).toBeInTheDocument();
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
   expect(api.invoke).not.toHaveBeenCalled();
 });

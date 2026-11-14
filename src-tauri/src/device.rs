@@ -81,7 +81,7 @@ pub struct ApplyRequest {
 }
 fn check_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "main" { return Err("Only the local main window may use the device".into()); }
-    if !cfg!(target_os = "windows") { return Err("Device access is currently Windows-only".into()); }
+    if !cfg!(any(target_os = "windows", target_os = "macos")) { return Err("Device access requires Windows or macOS".into()); }
     Ok(())
 }
 fn decode_snapshot(value: &serde_json::Value) -> Result<Snapshot, String> {
@@ -150,7 +150,31 @@ fn run_worker(mut request: serde_json::Value, app: &tauri::AppHandle, recovery: 
         _ => Err(format!("BLE worker failed before a valid result. Device state must be re-read. {}", error.chars().take(600).collect::<String>())),
     }
 }
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn run_worker(mut request: serde_json::Value, app: &tauri::AppHandle, recovery: Option<&std::path::Path>) -> Result<Snapshot, String> {
+    use std::{io::Read, process::Stdio, time::{Duration, Instant}};
+    request["backupDirectory"] = serde_json::json!(backup_directory(app)?);
+    let mut child = crate::mac_worker::command(app, false)?.env("VANZY_MANAGER_REQUEST", request.to_string())
+        .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e|e.to_string())?;
+    let stdout=child.stdout.take().ok_or("Missing worker stdout")?;
+    let stderr=child.stderr.take().ok_or("Missing worker stderr")?;
+    let out=std::thread::spawn(move || {let mut s=String::new();let _=stdout.take(65536).read_to_string(&mut s);s});
+    let err=std::thread::spawn(move || {let mut s=String::new();let _=stderr.take(8192).read_to_string(&mut s);s});
+    let start=Instant::now();
+    let status=loop {
+        if let Some(s)=child.try_wait().map_err(|e|e.to_string())? {break s;}
+        if start.elapsed()>Duration::from_secs(120) {let _=child.kill();let _=child.wait();return Err("BLE worker timed out. Outcome uncertain; read device before retrying. Backups preserved.".into());}
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let output=out.join().map_err(|_|"BLE output failed")?;
+    let error=err.join().unwrap_or_default();
+    let line=output.lines().find_map(|line|line.strip_prefix("VANZY_RESULT:")).ok_or_else(||format!("BLE worker failed: {}",error.chars().take(600).collect::<String>()))?;
+    if !status.success() {return Err(format!("BLE worker exited unexpectedly: {error}"));}
+    let value:serde_json::Value=serde_json::from_str(line).map_err(|e|e.to_string())?;
+    if value["ok"]==false && value["settingWriteSent"]==false {if let Some(path)=recovery {resolve_recovery(path)?;}}
+    decode_snapshot(&value)
+}
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn run_worker(_: serde_json::Value, _: &tauri::AppHandle, _: Option<&std::path::Path>) -> Result<Snapshot, String> { Err("Windows-only".into()) }
 
 #[tauri::command]

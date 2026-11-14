@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+mod mac_worker;
 mod device;
 mod host;
 mod host_input;
@@ -64,7 +66,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            host::host_start, host::host_stop, host::host_status, host::host_recover,
+            host::host_start, host::host_stop, host::host_status, host::host_recover, host::host_input_permission,
             device::device_read_snapshot,
             device::device_apply_map,
             device::device_apply_batch,

@@ -1,3 +1,5 @@
+import { useAppConfirm } from "./useAppConfirm";
+import { isMacHost } from "./native-platform";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
@@ -82,6 +84,10 @@ const keyLabelOf = (code: string) =>
 /** Native UI shares the guarded device controller; host sending is a guarded session. */
 export function NativeApp() {
   const d = useDeviceController();
+  const mac = isMacHost();
+  const appConfirm = useAppConfirm();
+  const [permissionChecking, setPermissionChecking] = useState(false);
+  const modifierChips = MODIFIER_CHIPS.map(([bit, label]) => [bit, mac ? (({ 1: "Control", 4: "Option", 2: "Shift", 8: "Command" } as Record<number, string>)[bit] ?? label) : label] as [number, string]);
   const [theme, setTheme] = useState<Theme>("system");
   const [view, setView] = useState<View>("assign");
   const [sel, setSel] = useState(1);
@@ -116,10 +122,11 @@ export function NativeApp() {
     externalBusy: d.busy || !!writeFlow,
     operationLock,
     onInvalidate: invalidate,
+    confirmAction: mac ? appConfirm.ask : undefined,
   });
   const profile = host.profile;
   const labels = host.labels;
-  const locked = d.busy || !!writeFlow || host.blocked;
+  const locked = permissionChecking || d.busy || !!writeFlow || host.blocked;
   const editable = !locked && !!d.snapshot && d.writable;
   const name = (index: number) => gestureName(index, labels);
 
@@ -292,8 +299,13 @@ export function NativeApp() {
     if (locked || operationLock.current) return;
     operationLock.current = true;
     try {
+      if (mac) {
+        setPermissionChecking(true);
+        await host.checkInputPermission(true);
+      }
       await d.operate(false);
     } finally {
+      setPermissionChecking(false);
       operationLock.current = false;
     }
   }
@@ -631,7 +643,7 @@ export function NativeApp() {
             >
               {label}
               {value === "assign" && host.active && (
-                <span className="nx-tab-dot" aria-label="送信中" />
+                <span className="nx-tab-dot" aria-label={host.status?.phase === "listening" ? "送信中" : "準備・復元中"} />
               )}
             </button>
           ))}
@@ -658,7 +670,7 @@ export function NativeApp() {
             <button
               type="button"
               className="nx-btn nx-btn-sm"
-              disabled={locked || !d.nativeWindows}
+              disabled={locked || !d.nativeSupported}
               onClick={() => void readDevice()}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" className="nx-stroke">
@@ -818,7 +830,7 @@ export function NativeApp() {
       <div className="nx-app">
         {header}
         <main className="nx-start">
-          <div className="nx-start-notices">{notices}</div>
+          <div className="nx-start-notices">{notices}{host.permissionNotice && <p role="status" className="nx-meta">{host.permissionNotice}</p>}</div>
           <section className="nx-card nx-start-card" aria-labelledby="nx-start-title">
             <span className="nx-start-icon" aria-hidden="true">
               <svg width="44" height="44" viewBox="0 0 28 28" fill="none">
@@ -843,7 +855,7 @@ export function NativeApp() {
               <button
                 type="button"
                 className="nx-btn nx-btn-primary nx-btn-lg"
-                disabled={locked || !d.nativeWindows}
+                disabled={locked || !d.nativeSupported}
                 onClick={() => void readDevice()}
               >
                 {d.busy ? "読み取っています…" : "本体を読み取る"}
@@ -854,9 +866,9 @@ export function NativeApp() {
                 </button>
               )}
               <p className="nx-meta">
-                {d.nativeWindows
-                  ? "対応: VANZY A2 · FW 3.2.1（Windows・ペアリング済み1台）"
-                  : "本体との通信は Windows 版でのみ利用できます。"}
+                {d.nativeSupported
+                  ? `対応: VANZY A2 · FW 3.2.1（${mac ? "macOS・実機検証前" : "Windows・ペアリング済み1台"}）`
+                  : "本体との通信は Windows・macOS のネイティブ版でのみ利用できます。"}
               </p>
             </div>
           </section>
@@ -915,7 +927,9 @@ export function NativeApp() {
           {host.busy
             ? "処理中…"
             : host.active
-              ? host.observing
+              ? host.status?.phase !== "listening"
+                ? `準備・復元中（${host.status?.phase ?? "確認中"}）`
+                : host.observing
                 ? "名前合わせ中"
                 : "送信中"
               : host.known
@@ -928,9 +942,12 @@ export function NativeApp() {
           ? `${profile.map((b) => name(b.index)).join("・")} の ${profile.length} 件は、送信中だけ動きます。`
           : "アプリ経由の割り当てはありません。同時押しを割り当てると使えます。"}
       </p>
-      {host.active && host.status && (
+      {host.permissionNotice && <p role="status" className="nx-meta">{host.permissionNotice}</p>}
+      {host.status && (
         <p className="nx-meta">
           受信 {host.status.eventCount} 回
+          {host.status.runtimeMode != null && ` · 最終確認モード: ${host.status.runtimeMode}`}
+          {host.status.restored === true && " · 本体設定の復元確認済み"}
           {host.status.lastGesture != null && ` · 最後: ${name(host.status.lastGesture)}`}
         </p>
       )}
@@ -1038,7 +1055,7 @@ export function NativeApp() {
           <button
             type="button"
             className="nx-btn nx-btn-sm"
-            disabled={locked || !d.nativeWindows}
+            disabled={locked || !d.nativeSupported}
             onClick={() => void readDevice()}
           >
             読み直す
@@ -1147,7 +1164,10 @@ export function NativeApp() {
               className="nx-input-zone"
               aria-pressed={capturing}
               disabled={!editable}
-              onClick={startCapture}
+              onClick={(event) => {
+                event.currentTarget.focus();
+                startCapture();
+              }}
               onBlur={stopCapture}
               onKeyDown={captureDown}
               onKeyUp={captureUp}
@@ -1172,7 +1192,7 @@ export function NativeApp() {
             修飾キー
           </span>
           <div className="nx-chips" role="group" aria-labelledby="nx-mods-label">
-            {MODIFIER_CHIPS.map(([bit, label]) => (
+            {modifierChips.map(([bit, label]) => (
               <button
                 key={bit}
                 type="button"
@@ -1375,7 +1395,9 @@ export function NativeApp() {
           <div>
             <span>
               {sending
-                ? `アプリ経由の送信中です。${currentLabel(sel, shown, profile)} が届きます。`
+                ? host.status?.phase === "listening"
+                  ? `アプリ経由の送信中です。${currentLabel(sel, shown, profile)} が届きます。`
+                  : "送信の準備・復元中です。まだ動作テストを始めないでください。"
                 : `アプリ経由の割り当て（${currentLabel(sel, shown, profile)}）です。いまは送信していないので、本体の設定 ${deviceLabel(sel, shown)} が届きます。`}
             </span>
           </div>
@@ -1403,6 +1425,7 @@ export function NativeApp() {
         className="nx-test-zone"
         aria-label="実動作テストの入力欄"
         aria-pressed={testFocus}
+        onClick={(event) => event.currentTarget.focus()}
         onFocus={() => setTestFocus(true)}
         onBlur={() => {
           setTestFocus(false);
@@ -1483,6 +1506,7 @@ export function NativeApp() {
         <div className="nx-content">{view === "assign" ? editor : testView}</div>
         {view === "assign" && saveBar}
       </main>
+      {appConfirm.confirmation}
       {writeFlow && (
         <NativeApplyDialog
           flow={writeFlow}

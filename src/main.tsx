@@ -1,3 +1,4 @@
+import { nativePlatform } from "./native-platform";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "@astryxdesign/core/reset.css";
@@ -16,7 +17,7 @@ import "./styles.css";
 import { App } from "./App";
 import { NativeApp } from "./NativeApp";
 import { isTauri } from "@tauri-apps/api/core";
-const Root = isTauri() && /Win/i.test(navigator.platform) ? NativeApp : App;
+const Root = nativePlatform(isTauri(), navigator.platform) !== null ? NativeApp : App;
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <Root />

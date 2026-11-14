@@ -26,7 +26,7 @@ test("only the local main webview has explicit application permissions", () => {
     "allow-device-apply-batch",
     "allow-device-cancel-batch",
     "allow-device-restore-previous",
-    "allow-host-start", "allow-host-stop", "allow-host-status", "allow-host-recover",
+    "allow-host-start", "allow-host-stop", "allow-host-status", "allow-host-recover", "allow-host-input-permission",
   ]);
 });
 
@@ -170,4 +170,24 @@ test("ordinary writes cannot skip unresolved host restoration", async () => {
   const guard = worker.indexOf("if($req.operation -ne 'read'){Assert-HostRecoveryResolved");
   const access = worker.indexOf("$selector=[Windows.Devices.Bluetooth.BluetoothLEDevice]");
   assert.ok(mutex < guard && guard < access);
+});
+
+test("macOS transport is a fixed bundled native helper with no frontend shell access", async () => {
+  const mac = JSON.parse(await read("src-tauri/tauri.macos.conf.json"));
+  assert.deepEqual(mac.bundle.resources, {"binaries/vanzy-macos":"vanzy-macos", "binaries/vanzy-macos-host":"vanzy-macos-host"});
+  const worker=await read("src-tauri/src/mac_worker.rs");
+  assert.match(worker, /resource_dir\(\)/);
+  assert.match(worker, /"vanzy-macos-host"/);
+  assert.doesNotMatch(worker, /\.args\(/);
+  const info=await read("src-tauri/Info.macos.plist");
+  assert.match(info, /NSBluetoothAlwaysUsageDescription/);
+});
+
+test("macOS permission request remains separate from device writes and key emission", async () => {
+  const host = await read("src-tauri/src/host.rs");
+  const input = await read("src-tauri/src/host_input.rs");
+  assert.match(host, /pub fn host_input_permission[\s\S]*?check\(&window\)\?;[\s\S]*?host_input::input_permission\(request\)/);
+  assert.match(input, /if !request \{ return Ok\(AXIsProcessTrusted\(\) != 0\); \}/);
+  assert.match(input, /AXIsProcessTrustedWithOptions\(dictionary\.0\)/);
+  assert.ok(host.indexOf("host_input::ensure_input_permission()?") < host.indexOf("let mut child=worker_command"));
 });

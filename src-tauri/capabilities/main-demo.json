@@ -17,6 +17,7 @@
     "allow-host-start",
     "allow-host-stop",
     "allow-host-status",
-    "allow-host-recover"
+    "allow-host-recover",
+    "allow-host-input-permission"
   ]
 }

@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "resources": {
+      "binaries/vanzy-macos": "vanzy-macos",
+      "binaries/vanzy-macos-host": "vanzy-macos-host"
+    },
+    "macOS": {
+      "infoPlist": "Info.macos.plist",
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

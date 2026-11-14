@@ -17,3 +17,5 @@ private/
 .DS_Store
 .betterleaks-report*
 src-tauri/gen/
+
+src-tauri/binaries/

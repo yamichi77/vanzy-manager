@@ -1,3 +1,4 @@
+import { nativePlatform } from "./native-platform";
 import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { DeviceSnapshot } from "./DevicePanel";
@@ -130,7 +131,7 @@ export default function HostPanel({
   externalBusy?: boolean;
   operationLock?: { current: boolean };
 }) {
-  const native = isTauri() && /Windows/i.test(navigator.userAgent);
+  const native = nativePlatform(isTauri(), navigator.platform) !== null;
   const [observeOnly, setObserveOnly] = useState(false);
   const [bindings, setBindings] = useState<HostBinding[]>([]);
   const [status, setStatus] = useState<HostStatus | null>(null);
@@ -432,7 +433,7 @@ export default function HostPanel({
         動作中はアプリを閉じず、終了前に「停止して元の設定へ復元」を押してください。
       </p>
       {!native ? (
-        <p>実機機能はWindowsネイティブ版でのみ利用可</p>
+        <p>実機機能はWindows・macOSネイティブ版でのみ利用可</p>
       ) : (
         <>
           <p role="status">
