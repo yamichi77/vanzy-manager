@@ -98,3 +98,18 @@ it("uses the shared capture UI to append and edit a macro chord while preserving
   expect(screen.getByRole("group", { name: "よく使うキー" })).toBeInTheDocument();
   expect(screen.getByLabelText("その他のキー")).toBeInTheDocument();
 });
+
+it("shows Windows targets and accepts a local EXE macro in the shared editor", () => {
+  const original = Object.getOwnPropertyDescriptor(navigator, "platform");
+  Object.defineProperty(navigator, "platform", { configurable: true, value: "Win32" });
+  try {
+    render(<MacroEditor value={{ version: 1, steps: [{ type: "openApp", app: String.raw`C:\Tools\Example.exe`, timeoutMs: 1000 }] }} onChange={vi.fn()} onSave={vi.fn()} onTest={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByText("対象アプリのEXEパス / パッケージID")).toBeInTheDocument();
+    expect(screen.getByLabelText("手順1の対象アプリ")).toHaveAttribute("maxlength", "32767");
+    expect(screen.getByRole("button", { name: "PC内に保存" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "試す" })).toBeEnabled();
+  } finally {
+    if (original) Object.defineProperty(navigator, "platform", original);
+    else Reflect.deleteProperty(navigator, "platform");
+  }
+});

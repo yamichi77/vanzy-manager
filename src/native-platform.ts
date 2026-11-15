@@ -6,3 +6,5 @@ export function nativePlatform(tauri: boolean, platform: string): "macOS" | "Win
   return null;
 }
 export const isMacHost = () => /^Mac/i.test(navigator.platform);
+
+export const isWindowsHost = () => /^Win/i.test(navigator.platform);

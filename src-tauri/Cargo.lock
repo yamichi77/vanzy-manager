@@ -3759,6 +3759,7 @@ dependencies = [
  "tauri-build",
  "uuid",
  "vanzy-safety-core",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

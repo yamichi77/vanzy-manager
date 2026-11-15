@@ -14,7 +14,21 @@ const record = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 const integer = (v: unknown, min: number, max: number): v is number =>
   Number.isInteger(v) && Number(v) >= min && Number(v) <= max;
-export function validMacroApp(app: unknown): app is string {
+export type MacroPlatform = "macos" | "windows";
+export const macroPlatform = (): MacroPlatform =>
+  typeof navigator !== "undefined" && /^Win/i.test(navigator.platform) ? "windows" : "macos";
+/** Local OS identifiers, never command lines. Native code checks existence/identity again. */
+export function validMacroApp(app: unknown, platform: MacroPlatform = macroPlatform()): app is string {
+  if (platform === "windows") {
+    if (typeof app !== "string") return false;
+    if (app.startsWith("aumid:")) {
+      const id = app.slice(6);
+      return id.length <= 255 && /^[A-Za-z0-9._-]+![A-Za-z0-9._-]+$/.test(id);
+    }
+    return app.length <= 32767 && /^[A-Za-z]:\\/.test(app) && /\.exe$/i.test(app) &&
+      !/[\x00-\x1f\x7f<>"|?*\/]/.test(app) && !app.slice(2).includes(":") &&
+      app.slice(3).split("\\").every(part => !!part && part !== "." && part !== ".." && !/[. ]$/.test(part));
+  }
   return (
     typeof app === "string" &&
     app.length <= 255 &&
@@ -53,7 +67,7 @@ export function validMacroUrl(url: unknown): url is string {
   }
 }
 /** Reject unknown input without altering it, including saved profiles from newer versions. */
-export function validateMacro(raw: unknown): string | null {
+export function validateMacro(raw: unknown, platform: MacroPlatform = macroPlatform()): string | null {
   if (!record(raw) || raw.version !== 1 || !Array.isArray(raw.steps))
     return "マクロの形式またはバージョンを確認してください。";
   if (raw.steps.length < 1 || raw.steps.length > MAX_MACRO_STEPS)
@@ -74,7 +88,7 @@ export function validateMacro(raw: unknown): string | null {
           (!step.keys.length && step.modifiers !== 8)
         )
           return prefix + "通常キー1〜6個と修飾キーを設定してください。";
-        if (step.targetApp !== undefined && !validMacroApp(step.targetApp))
+        if (step.targetApp !== undefined && !validMacroApp(step.targetApp, platform))
           return prefix + "送信条件の対象アプリ識別子を入力してください。";
         break;
       case "wait":
@@ -85,7 +99,7 @@ export function validateMacro(raw: unknown): string | null {
         break;
       case "openApp":
       case "openUrl":
-        if (!validMacroApp(step.app))
+        if (!validMacroApp(step.app, platform))
           return prefix + "対象アプリの識別子を入力してください。";
         if (!integer(step.timeoutMs, 100, 10_000))
           return prefix + "起動待機の上限は100〜10000msにしてください。";

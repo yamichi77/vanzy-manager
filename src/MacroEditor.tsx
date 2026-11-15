@@ -1,6 +1,6 @@
 import { KeyBindingEditor } from "./KeyBindingEditor";
 import { macroKeyDraft, updateMacroKey } from "./macro-key-adapter";
-import { isMacHost } from "./native-platform";
+import { isMacHost, isWindowsHost } from "./native-platform";
 import {
   MAX_MACRO_STEPS,
   moveMacroStep,
@@ -44,6 +44,9 @@ export function MacroEditor({
   const error = validateMacro(value);
   const locked = disabled || running;
   const mac = isMacHost();
+  const windows = isWindowsHost();
+  const appMaxLength = windows ? 32767 : 255;
+  const appPlaceholder = windows ? "C:\\Program Files\\Example\\Example.exe または aumid:Example.Package_abc!App" : "org.example.App";
   const replace = (index: number, step: MacroStep) =>
     onChange({
       ...value,
@@ -67,6 +70,7 @@ export function MacroEditor({
       <p className="nx-meta">
         アプリが最前面になっても、画面や入力欄の準備完了は保証されません。必要な待機時間は手順で設定できます。
       </p>
+      {windows && <p className="nx-meta">WindowsではEXEの絶対パス、または aumid: から始まる登録済みパッケージIDを指定します。引数は入力しません。URLはOSの登録先で開き、指定アプリが最前面になるまで待ちます。前面化が拒否された場合は停止します。</p>}
       {!supported && (
         <p className="nx-alert" role="status">
           この環境のマクロ実行は未対応です。編集とPC内保存のみ利用できます。
@@ -183,13 +187,14 @@ export function MacroEditor({
                   </label>
                   {step.targetApp !== undefined && (
                     <label>
-                      送信条件のアプリ識別子
+                      {windows ? "送信条件のEXEパス / パッケージID" : "送信条件のアプリ識別子"}
                       <input
                         type="text"
                         aria-label={`手順${index + 1}の送信条件アプリ`}
                         autoComplete="off"
                         spellCheck={false}
-                        maxLength={255}
+                        maxLength={appMaxLength}
+                        placeholder={appPlaceholder}
                         value={step.targetApp}
                         onChange={(e) =>
                           replace(index, { ...step, targetApp: e.target.value })
@@ -224,14 +229,15 @@ export function MacroEditor({
               {(step.type === "openApp" || step.type === "openUrl") && (
                 <>
                   <label>
-                    {mac ? "対象アプリのバンドルID" : "対象アプリの識別子"}
+                    {mac ? "対象アプリのバンドルID" : windows ? "対象アプリのEXEパス / パッケージID" : "対象アプリの識別子"}
                     <input
                       type="text"
                       aria-label={`手順${index + 1}の対象アプリ`}
                       autoComplete="off"
                       spellCheck={false}
                       value={step.app}
-                      maxLength={255}
+                      maxLength={appMaxLength}
+                      placeholder={appPlaceholder}
                       onChange={(e) =>
                         replace(index, { ...step, app: e.target.value })
                       }

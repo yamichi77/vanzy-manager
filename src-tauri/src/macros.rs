@@ -21,14 +21,17 @@ pub struct Status {pub running:bool,pub step:Option<usize>,pub error:Option<Stri
 pub static ACTIVITY_GATE:Mutex<()>=Mutex::new(());
 #[derive(Default)]
 pub struct MacroState {status:Arc<Mutex<Status>>,cancel:Arc<AtomicBool>}
-fn app_valid(app:&str)->bool {app.len()<=255 && app.contains('.') && app.split('.').all(|p|!p.is_empty()&&p.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'))}
+#[cfg(windows)] #[path="macros_windows.rs"] mod windows_adapter;
+fn same_app(a:&str,b:&str)->bool { #[cfg(windows)] {windows_adapter::same(a,b)} #[cfg(not(windows))] {a==b} }
+#[cfg(windows)] fn app_valid(app:&str)->bool {windows_adapter::valid(app)}
+#[cfg(not(windows))] fn app_valid(app:&str)->bool {app.len()<=255 && app.contains('.') && app.split('.').all(|p|!p.is_empty()&&p.bytes().all(|b|b.is_ascii_alphanumeric()||b==b'-'||b==b'_'))}
 pub fn validate(m:&Macro)->Result<(),String>{
  if m.version!=1 || m.steps.is_empty() || m.steps.len()>32{return Err("Macro requires version 1 and 1–32 steps".into())}
  let mut waits=0u64;let mut budget=0u64;
  for s in &m.steps {match s {
-  Step::Key{keys,modifiers,target_app}=>{if target_app.as_ref().is_some_and(|app|!app_valid(app)){return Err("Invalid target application bundle ID".into())}crate::host_input::validate_chord(keys,*modifiers)?;},
+  Step::Key{keys,modifiers,target_app}=>{if target_app.as_ref().is_some_and(|app|!app_valid(app)){return Err("Invalid target application identity".into())}crate::host_input::validate_chord(keys,*modifiers)?;},
   Step::Wait{ms}=>{if *ms>10000{return Err("Wait exceeds 10000 ms".into())}waits+=*ms;budget+=*ms;if waits>10000{return Err("Total waits must not exceed 10000 ms".into())}},
-  Step::OpenApp{app,timeout_ms}|Step::OpenUrl{app,timeout_ms,..}=>{if !app_valid(app)||!(100..=10000).contains(timeout_ms){return Err("Valid application bundle ID and timeout 100–10000 ms required".into())}budget+=*timeout_ms;}
+  Step::OpenApp{app,timeout_ms}|Step::OpenUrl{app,timeout_ms,..}=>{if !app_valid(app)||!(100..=10000).contains(timeout_ms){return Err("Valid application identity and timeout 100–10000 ms required".into())}budget+=*timeout_ms;}
  };if budget>60000{return Err("Macro configured duration exceeds 60000 ms".into())}if let Step::OpenUrl{url,..}=s {
   // HTTPS and application URI schemes only; no files, shell/script/data handlers,
   // credentials, whitespace or command-line options. Values never appear in errors.
@@ -53,7 +56,7 @@ pub fn start(app:&tauri::AppHandle,m:Macro)->Result<(),String>{
  let status=state.status.clone();let cancel=state.cancel.clone();
  std::thread::spawn(move||{let result=run(&m,&cancel,|n|{if let Ok(mut s)=status.lock(){s.step=Some(n)}});if let Ok(mut s)=status.lock(){s.running=false;s.error=result.err();}});Ok(())
 }
-pub fn adapter_supported()->Result<(),String>{if cfg!(target_os="macos"){Ok(())}else{Err("Macro OS adapter is not verified on this platform; existing key assignments remain available".into())}}
+pub fn adapter_supported()->Result<(),String>{#[cfg(windows)] windows_adapter::available()?;if cfg!(any(target_os="macos",windows)){Ok(())}else{Err("Macro OS adapter is not verified on this platform; existing key assignments remain available".into())}}
 fn guard(cancel:&AtomicBool,deadline:Instant)->Result<(),String>{if cancel.load(Ordering::SeqCst){Err("Macro cancelled".into())}else if Instant::now()>=deadline{Err("Macro execution timed out".into())}else{Ok(())}}
 trait Adapter {
  fn foreground(&mut self)->Result<String,String>;
@@ -76,21 +79,23 @@ fn run_with(m:&Macro,cancel:&AtomicBool,mut progress:impl FnMut(usize),io:&mut i
     // Unconfigured keys intentionally follow the foreground at this step.
     let current=io.foreground()?;
     if current=="dev.vanzy.manager.demo"{return Err("Macro keys cannot target VANZY Manager".into())}
-    if target_app.as_ref().is_some_and(|target|*target!=current){return Err(format!("Step {}: target application is not frontmost",index+1))}
+    if target_app.as_ref().is_some_and(|target|!same_app(target,&current)){return Err(format!("Step {}: target application is not frontmost",index+1))}
     guard(cancel,deadline)?;io.chord(keys,*modifiers)?;
    },
    Step::Wait{ms}=>{let until=Instant::now()+Duration::from_millis(*ms);while Instant::now()<until{guard(cancel,deadline)?;std::thread::sleep(Duration::from_millis(10));}},
-   Step::OpenApp{app,timeout_ms}=>{let previous=io.foreground()?;io.launch(&["-b",app],cancel,deadline)?;wait_frontmost(app,&previous,*timeout_ms,cancel,deadline,io)?;},
-   Step::OpenUrl{url,app,timeout_ms}=>{let previous=io.foreground()?;io.launch(&["-b",app,url],cancel,deadline)?;wait_frontmost(app,&previous,*timeout_ms,cancel,deadline,io)?;},
+   Step::OpenApp{app,timeout_ms}=>{let previous=io.foreground()?;let step_deadline=open_deadline(deadline,*timeout_ms);io.launch(&["-b",app],cancel,step_deadline)?;wait_frontmost(app,&previous,*timeout_ms,cancel,step_deadline,io)?;},
+   Step::OpenUrl{url,app,timeout_ms}=>{let previous=io.foreground()?;let step_deadline=open_deadline(deadline,*timeout_ms);io.launch(&["-b",app,url],cancel,step_deadline)?;wait_frontmost(app,&previous,*timeout_ms,cancel,step_deadline,io)?;},
   }
  }Ok(())
 }
 
-fn wait_frontmost(app:&str,previous:&str,timeout:u64,cancel:&AtomicBool,deadline:Instant,io:&mut impl Adapter)->Result<(),String>{let until=Instant::now()+Duration::from_millis(timeout);loop{guard(cancel,deadline)?;let current=io.foreground()?;if current==app{return Ok(())}if current!=previous{return Err("Unexpected foreground application while opening target".into())}if Instant::now()>=until{return Err("Target application did not become frontmost before timeout".into())}std::thread::sleep(Duration::from_millis(20));}}
+fn open_deadline(deadline:Instant,timeout:u64)->Instant{#[cfg(windows)]{deadline.min(Instant::now()+Duration::from_millis(timeout))}#[cfg(not(windows))]{let _=timeout;deadline}}
+fn wait_frontmost(app:&str,previous:&str,timeout:u64,cancel:&AtomicBool,deadline:Instant,io:&mut impl Adapter)->Result<(),String>{let until=Instant::now()+Duration::from_millis(timeout);loop{guard(cancel,deadline)?;let current=io.foreground()?;if same_app(&current,app){return Ok(())}if current!=previous{return Err("Unexpected foreground application while opening target".into())}if Instant::now()>=until{return Err("Target application did not become frontmost before timeout".into())}std::thread::sleep(Duration::from_millis(20));}}
 fn open(args:&[&str],cancel:&AtomicBool,macro_deadline:Instant)->Result<(),String>{
  guard(cancel,macro_deadline)?;
  #[cfg(target_os="macos")] {let mut command=std::process::Command::new("/usr/bin/open");command.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());let mut child=command.spawn().map_err(|_|"Could not request OS application launch")?;let deadline=Instant::now()+Duration::from_secs(2);loop{if let Err(e)=guard(cancel,macro_deadline){let _=child.kill();let _=child.wait();return Err(e)}match child.try_wait(){Ok(Some(s))=>return if s.success(){Ok(())}else{Err("OS could not open target".into())},Ok(None)=>{},Err(_)=>return Err("OS launch status unavailable".into())}if Instant::now()>=deadline{let _=child.kill();let _=child.wait();return Err("OS launch request timed out".into())}std::thread::sleep(Duration::from_millis(10));}}
- #[cfg(not(target_os="macos"))] {let _=args;adapter_supported()}
+ #[cfg(windows)] {windows_adapter::open(args,cancel,macro_deadline)}
+ #[cfg(not(any(target_os="macos",windows)))] {let _=args;adapter_supported()}
 }
 #[cfg(target_os="macos")]
 fn frontmost()->Result<String,String>{
@@ -106,10 +111,12 @@ fn frontmost()->Result<String,String>{
  let result=if bytes.is_null(){Err("Foreground application cannot be verified".into())}else{Ok(CStr::from_ptr(bytes).to_string_lossy().into_owned())};
  msg(pool,sel_registerName(b"drain\0".as_ptr().cast()));result}
 }
-#[cfg(not(target_os="macos"))]fn frontmost()->Result<String,String>{Err("Foreground verification unsupported".into())}
+#[cfg(windows)] fn frontmost()->Result<String,String>{windows_adapter::foreground()}
+#[cfg(not(any(target_os="macos",windows)))]fn frontmost()->Result<String,String>{Err("Foreground verification unsupported".into())}
+#[cfg(test)]fn test_app()->&'static str{if cfg!(windows){r"C:\Example\App.exe"}else{"org.example.App"}}
 #[cfg(test)]mod tests{use super::*;fn m(steps:Vec<Step>)->Macro{Macro{version:1,steps}}
  #[test]fn rejects_limits(){assert!(validate(&m(vec![])).is_err());assert!(validate(&m(vec![Step::Wait{ms:10001}])).is_err());assert!(validate(&m(vec![Step::Wait{ms:5001},Step::Wait{ms:5000}])).is_err());assert!(validate(&m(vec![Step::Wait{ms:0};33])).is_err());}
- #[test]fn allows_url_keys_but_rejects_unsafe_urls(){for url in ["file:///tmp/a","javascript:alert(1)","https://user:password@example.org","https://example.org/\n"]{assert!(validate(&m(vec![Step::OpenUrl{url:url.into(),app:"org.example.App".into(),timeout_ms:1000}])).is_err())}assert!(validate(&m(vec![Step::OpenUrl{url:"https://example.org".into(),app:"org.example.App".into(),timeout_ms:1000},Step::Key{keys:vec![4],modifiers:0,target_app:None}])).is_ok());}
+ #[test]fn allows_url_keys_but_rejects_unsafe_urls(){for url in ["file:///tmp/a","javascript:alert(1)","https://user:password@example.org","https://example.org/\n"]{assert!(validate(&m(vec![Step::OpenUrl{url:url.into(),app:test_app().into(),timeout_ms:1000}])).is_err())}assert!(validate(&m(vec![Step::OpenUrl{url:"https://example.org".into(),app:test_app().into(),timeout_ms:1000},Step::Key{keys:vec![4],modifiers:0,target_app:None}])).is_ok());}
  #[test]fn cancellation_and_timeout(){assert!(guard(&AtomicBool::new(true),Instant::now()+Duration::from_secs(1)).is_err());assert!(guard(&AtomicBool::new(false),Instant::now()).is_err());}
 }
 
@@ -127,9 +134,33 @@ fn frontmost()->Result<String,String>{
  #[test]fn optional_guard_rejects_mismatch(){let mut io=fake();let m=Macro{version:1,steps:vec![Step::Key{keys:vec![4],modifiers:0,target_app:Some("target.app".into())}]};assert!(run_with(&m,&AtomicBool::new(false),|_|{},&mut io).is_err());assert!(io.events.is_empty());}
  #[test]fn optional_guard_allows_match(){let mut io=fake();let m=Macro{version:1,steps:vec![Step::Key{keys:vec![4],modifiers:0,target_app:Some("initial.app".into())}]};assert!(run_with(&m,&AtomicBool::new(false),|_|{},&mut io).is_ok());assert_eq!(io.events,vec!["key+release"]);}
  #[test]fn ordinary_keys_follow_foreground(){let mut io=fake();io.steal_at=2;let m=Macro{version:1,steps:vec![key(),key()]};assert!(run_with(&m,&AtomicBool::new(false),|_|{},&mut io).is_ok());assert_eq!(io.events,vec!["key+release","key+release"]);}
- #[test]fn url_wait_then_key_allowed(){let mut io=fake();let m=Macro{version:1,steps:vec![Step::OpenUrl{url:"https://example.org".into(),app:"target.app".into(),timeout_ms:100},Step::Wait{ms:1},key()]};assert!(validate(&m).is_ok());assert!(run_with(&m,&AtomicBool::new(false),|_|{},&mut io).is_ok());assert_eq!(io.events,vec!["open","key+release"]);}
+ #[test]fn url_wait_then_key_allowed(){let mut io=fake();let m=Macro{version:1,steps:vec![Step::OpenUrl{url:"https://example.org".into(),app:"target.app".into(),timeout_ms:100},Step::Wait{ms:1},key()]};assert!(run_with(&m,&AtomicBool::new(false),|_|{},&mut io).is_ok());assert_eq!(io.events,vec!["open","key+release"]);}
  #[test]fn manager_self_target_is_always_refused(){let mut io=fake();io.app="dev.vanzy.manager.demo".into();let m=Macro{version:1,steps:vec![key()]};assert!(run_with(&m,&AtomicBool::new(false),|_|{},&mut io).is_err());assert!(io.events.is_empty());}
  #[test]fn cancel_prevents_all_output(){let mut io=fake();let m=Macro{version:1,steps:vec![key()]};assert!(run_with(&m,&AtomicBool::new(true),|_|{},&mut io).is_err());assert!(io.events.is_empty());}
  #[test]fn timeout_does_not_send_next_key(){let mut io=fake();io.switch_on_launch=false;let m=Macro{version:1,steps:vec![Step::OpenApp{app:"target.app".into(),timeout_ms:1},key()]};assert!(run_with(&m,&AtomicBool::new(false),|_|{},&mut io).is_err());assert_eq!(io.events,vec!["open"]);}
  #[test]fn cancellation_during_wait_stops_next_key(){let mut io=fake();let cancel=AtomicBool::new(false);let m=Macro{version:1,steps:vec![Step::Wait{ms:100},key()]};assert!(run_with(&m,&cancel,|_|{cancel.store(true,Ordering::SeqCst)},&mut io).is_err());assert!(io.events.is_empty());}
+}
+
+
+
+#[cfg(all(test,windows))]
+mod native_probe {
+ use super::*;
+ // Explicitly opt-in. Only a caller-provided neutral, auto-closing test fixture;
+ // no real application, microphone, URL handler, or physical device operations.
+ #[test] #[ignore = "requires isolated Windows dummy window and an interactive desktop"]
+ fn isolated_windows_launch_and_key_delivery(){
+  let path=std::env::var("VANZY_MACRO_PROBE_EXE").expect("neutral probe EXE required");
+  let report=std::env::var("VANZY_MACRO_PROBE_REPORT").expect("probe report required");
+  assert!(PathCheck::is_fixture(&path));
+  let steps=vec![Step::OpenApp{app:path.clone(),timeout_ms:4000},Step::Wait{ms:200},
+   Step::Key{keys:vec![0x2b],modifiers:0,target_app:Some(path.clone())},
+   Step::Key{keys:vec![0x2c],modifiers:0,target_app:Some(path.clone())}];
+  let m=Macro{version:1,steps};validate(&m).unwrap();
+  run(&m,&AtomicBool::new(false),|_|{}).expect("OS launch and guarded keys");
+  let until=Instant::now()+Duration::from_secs(1);
+  loop{if std::fs::read_to_string(&report).unwrap_or_default().contains("button-click"){break}
+   assert!(Instant::now()<until,"OS accepted keys but fixture did not observe button click");std::thread::sleep(Duration::from_millis(20));}
+ }
+ struct PathCheck;impl PathCheck{fn is_fixture(p:&str)->bool{std::path::Path::new(p).file_name().is_some_and(|n|n=="vanzy-macro-probe.exe")}}
 }

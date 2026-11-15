@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import {
   emptyMacro,
   moveMacroStep,
@@ -17,6 +17,8 @@ const macro: MacroDefinition = {
   ],
 };
 describe("host-only macro schema", () => {
+  beforeEach(() => vi.stubGlobal("navigator", { platform: "MacIntel" }));
+  afterEach(() => vi.unstubAllGlobals());
   it("preserves chords, order and data without migration writes", () => {
     const copy = JSON.stringify(macro);
     expect(validateMacro(macro)).toBeNull();

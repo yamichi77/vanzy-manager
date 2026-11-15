@@ -97,7 +97,7 @@ function dependencyNames(manifest) {
   }
   return names.sort();
 }
-const allowedDeps = ["serde", "serde_json", "tauri", "tauri-build", "uuid", "vanzy-safety-core", "windows-sys"];
+const allowedDeps = ["serde", "serde_json", "tauri", "tauri-build", "uuid", "vanzy-safety-core", "windows", "windows-sys"];
 test("Rust has exactly the approved direct dependencies", async () => {
   assert.deepEqual(
     dependencyNames(await read("src-tauri/Cargo.toml")),

@@ -118,7 +118,7 @@ node scripts/sign-macos-local.mjs \
 The native assignment screen retains the existing key editor. Selecting **マクロ**
 opens an ordered step editor for that gesture: key tap/chord, bounded delay,
 application launch/activation with a frontmost timeout, and URL opening in an
-explicit application. **PC内に保存** stores a separate local profile; it does not
+explicit application on macOS, or the registered OS URL handler on Windows. **PC内に保存** stores a separate local profile; it does not
 write firmware or device mappings. Removing a macro restores the unchanged
 original key assignment. During an explicitly started host session the macro
 replaces that gesture's normal host output.
@@ -139,9 +139,48 @@ steps require a preceding explicit application or URL opener; macro keys never
 target VANZY Manager itself. No application-specific shortcuts or voice-input
 behavior are built in.
 
-The initial OS adapter supports macOS application bundle identifiers. Windows
-macro execution is explicitly unsupported until its adapter is verified;
-existing Windows single-chord behavior is unchanged. Local macro editing and
-storage are still available. No shell/script steps, loops, or built-in example
-URLs are provided. URLs and application identifiers stay in local settings and
-are not included in runner error messages. Do not put credentials in URLs.
+The macOS adapter uses application bundle identifiers. The Windows adapter accepts
+an absolute local EXE path (for example `C:\Program Files\Example\Example.exe`)
+or a registered packaged app identifier prefixed with `aumid:` (for example
+`aumid:Example.Package_abc!App`). These are identifiers, not command lines:
+arguments, relative/UNC/device paths, and loose desktop AppUserModelIDs are not
+accepted. Windows app opening restores an existing matching window when possible;
+foreground activation remains subject to normal Windows restrictions and fails
+safely if the target does not become frontmost. No elevation or focus workaround
+is attempted. Paths are local to each PC; settings are not automatically portable.
+
+Windows URL opening uses the OS-registered handler, not an arbitrary EXE argument.
+The registered handler must match the configured application before dispatch;
+unknown or mismatched handlers are refused. Afterwards the runner observes the
+foreground application, not the destination page or input focus. This does not
+establish that any particular ChatGPT, voice-input, or third-party app flow works.
+
+Existing Windows single-chord behavior is unchanged. No shell/script steps,
+loops, or built-in example URLs are provided. URLs and application identifiers
+stay in local settings and are not included in runner error messages. Do not put
+credentials in URLs.
+
+### Windows standalone build
+
+From the repository root in PowerShell, build with the Tauri CLI so the frontend
+is built and embedded into the executable:
+
+```powershell
+.\node_modules\.bin\tauri.cmd build --no-bundle
+```
+
+The executable is `src-tauri/target/release/vanzy-manager.exe`. Do not distribute
+an executable produced only by `cargo build --release`: without Tauri's
+`custom-protocol` feature it can try the development URL instead of the embedded
+frontend and show a blank window. Build output and local settings are not source
+artifacts and must not be committed.
+
+### Windows verification limits
+
+The opening timeout includes the OS launch request and foreground wait. Cancellation stops later macro steps promptly. An already-dispatched OS request cannot be undone and may still finish; while it remains in flight, new macros are refused, never queued or replayed.
+
+Executable identity comparison is case-insensitive for ASCII, not path canonicalization. Use the actual long executable path (not a short-name, junction alias or renamed copy). Packaged apps use `aumid:PackageFamily!ApplicationId`; hosted windows whose process does not expose that identity fail closed. These cases do not enable elevation or focus-policy bypasses.
+
+Windows native verification on the main PC: release build and non-interactive unit/contract/UI tests completed. The opt-in neutral window probe was launched successfully, but did not become foreground within its deadline under the tool session; the sequence stopped before sending Tab/Space. Actual key delivery, packaged-app activation, and real URL navigation are therefore not claimed as verified. No ChatGPT, Grok, Muse, microphone or physical-device tests were performed.
+
+The neutral, auto-closing probe source is `tests/native/WindowsMacroProbe.cs`. Compile it as `vanzy-macro-probe.exe` with the .NET Framework C# compiler and Windows Forms references. The ignored Rust test `macros::native_probe::isolated_windows_launch_and_key_delivery` requires `VANZY_MACRO_PROBE_EXE` and a fresh `VANZY_MACRO_PROBE_REPORT` path. It deliberately requires an interactive foreground; it never weakens Windows focus restrictions to make a test pass.

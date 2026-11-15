@@ -3,7 +3,7 @@ import { MacroEditor } from "./MacroEditor";
 import { useMacroProfile } from "./useMacroProfile";
 import type { MacroDefinition } from "./macro-model";
 import { useAppConfirm } from "./useAppConfirm";
-import { isMacHost } from "./native-platform";
+import { isMacHost, isWindowsHost } from "./native-platform";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
@@ -983,7 +983,7 @@ export function NativeApp() {
         onStop={() => void macros.stop()}
         disabled={locked || !identity || !macros.known}
         running={macros.status.running}
-        supported={mac}
+        supported={mac || isWindowsHost()}
         dirty={JSON.stringify(macroValue) !== JSON.stringify(savedMacro)}
         status={macros.status.error ?? (macros.status.running ? `手順 ${macros.status.step ?? 0} を実行中` : "")}
       /> : <>
