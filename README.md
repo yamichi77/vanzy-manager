@@ -112,3 +112,36 @@ node scripts/sign-macos-local.mjs \
 初回の OS 許可は本人が新しい署名版に対して行います。以後の許可保持は実機でも検証してください。
 キーチェーンが署名鍵の使用確認を表示した場合は本人が認証してください。
 自己署名は Developer ID 署名・公証ではなく、他の人向けバイナリ配布用ではありません。
+
+### Host-only macros (experimental)
+
+The native assignment screen retains the existing key editor. Selecting **マクロ**
+opens an ordered step editor for that gesture: key tap/chord, bounded delay,
+application launch/activation with a frontmost timeout, and URL opening in an
+explicit application. **PC内に保存** stores a separate local profile; it does not
+write firmware or device mappings. Removing a macro restores the unchanged
+original key assignment. During an explicitly started host session the macro
+replaces that gesture's normal host output.
+
+Macros run once, sequentially. Additional gestures while one runs are dropped,
+not queued. Stop, disconnect, or a timeout cancels further steps without retry.
+Key chords release their own keys before continuing. Each key step can optionally
+require a specific application to be frontmost immediately before sending; a
+mismatch stops the macro with a reason. Without that optional condition, a key
+step sends normally to the current foreground app. Delays do not lock focus.
+URL → delay → key sequences are supported, without a mandatory inherited target.
+Application/URL opening still waits for its specified target with a bounded
+timeout and rejects unexpected foreground transitions during that opening step.
+
+Foreground verification does not prove content, text-field, or microphone
+readiness, and delays are timing choices rather than readiness checks. Test key
+steps require a preceding explicit application or URL opener; macro keys never
+target VANZY Manager itself. No application-specific shortcuts or voice-input
+behavior are built in.
+
+The initial OS adapter supports macOS application bundle identifiers. Windows
+macro execution is explicitly unsupported until its adapter is verified;
+existing Windows single-chord behavior is unchanged. Local macro editing and
+storage are still available. No shell/script steps, loops, or built-in example
+URLs are provided. URLs and application identifiers stay in local settings and
+are not included in runner error messages. Do not put credentials in URLs.

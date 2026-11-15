@@ -18,6 +18,9 @@
     "allow-host-stop",
     "allow-host-status",
     "allow-host-recover",
-    "allow-host-input-permission"
+    "allow-host-input-permission",
+    "allow-macro-test",
+    "allow-macro-status",
+    "allow-macro-cancel"
   ]
 }

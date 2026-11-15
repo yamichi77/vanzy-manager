@@ -1,10 +1,13 @@
+import { KeyBindingEditor } from "./KeyBindingEditor";
+import { MacroEditor } from "./MacroEditor";
+import { useMacroProfile } from "./useMacroProfile";
+import type { MacroDefinition } from "./macro-model";
 import { useAppConfirm } from "./useAppConfirm";
 import { isMacHost } from "./native-platform";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import {
   currentDescription,
-  deviceKeys,
   useDeviceController,
 } from "./DevicePanel";
 import type { BatchChange, BatchResult, DeviceSnapshot } from "./DevicePanel";
@@ -19,7 +22,6 @@ import { FIRMWARE_DEFAULT_CODE } from "./firmware-defaults";
 import {
   AIR_IDS,
   GESTURE_IDS,
-  MAX_CHORD_KEYS,
   MODIFIER_KEYS,
   TOUCH_IDS,
   baseDraft,
@@ -38,7 +40,6 @@ import {
   gestureName,
   isChange,
   isDefaultDraft,
-  isWindowsOnlyDraft,
   planSave,
   receivedLabel,
   unverifiedNote,
@@ -59,50 +60,28 @@ type WritePlan = {
 };
 type TestEntry = { time: string; combo: string; ok: boolean };
 
-const COMMON_KEYS = [
-  "ArrowLeft",
-  "ArrowRight",
-  "ArrowUp",
-  "ArrowDown",
-  "PageUp",
-  "PageDown",
-  "Tab",
-  "Space",
-  "Enter",
-  "Escape",
-];
-/** Display order of the modifier chips: Ctrl, Alt, Shift, Win. */
-const MODIFIER_CHIPS: [number, string][] = [
-  [1, "Ctrl"],
-  [4, "Alt"],
-  [2, "Shift"],
-  [8, "Win"],
-];
-const keyLabelOf = (code: string) =>
-  deviceKeys.find((key) => key.code === code)?.label ?? code;
-
 /** Native UI shares the guarded device controller; host sending is a guarded session. */
 export function NativeApp() {
   const d = useDeviceController();
   const mac = isMacHost();
   const appConfirm = useAppConfirm();
   const [permissionChecking, setPermissionChecking] = useState(false);
-  const modifierChips = MODIFIER_CHIPS.map(([bit, label]) => [bit, mac ? (({ 1: "Control", 4: "Option", 2: "Shift", 8: "Command" } as Record<number, string>)[bit] ?? label) : label] as [number, string]);
   const [theme, setTheme] = useState<Theme>("system");
   const [view, setView] = useState<View>("assign");
   const [sel, setSel] = useState(1);
+  const [macroModes, setMacroModes] = useState<Record<number, boolean>>({});
+  const [macroDrafts, setMacroDrafts] = useState<Record<number, MacroDefinition>>({});
+  const [macroInspect, setMacroInspect] = useState(false);
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
   const [lastGood, setLastGood] = useState<DeviceSnapshot | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
-  const [live, setLive] = useState("");
+  const [captureReset, setCaptureReset] = useState(0);
   const [hint, setHint] = useState("");
   const [writeFlow, setWriteFlow] = useState<NativeApplyFlow | null>(null);
   const [testFocus, setTestFocus] = useState(false);
   const [history, setHistory] = useState<TestEntry[]>([]);
   const [physicalName, setPhysicalName] = useState<string>(PHYSICAL_NAMES[0]);
-  const held = useRef<string[]>([]);
-  const heldMask = useRef(0);
   const testHeld = useRef<string[]>([]);
   const testMask = useRef(0);
   const operationLock = useRef(false);
@@ -117,7 +96,13 @@ export function NativeApp() {
     d.setSnapshot(null);
     d.setStatus("");
   }, [d.setSnapshot, d.setStatus]);
+  const macros = useMacroProfile(identity, macroInspect);
+  const savedMacro = macros.profile.find(b => b.index === sel)?.macro;
+  const macroMode = macroModes[sel] ?? !!savedMacro;
+  const macroValue = macroDrafts[sel] ?? savedMacro ?? { version: 1 as const, steps: [] };
+  useEffect(() => { setMacroModes({}); setMacroDrafts({}); }, [identity]);
   const host = useHostController({
+    macros: macros.profile,
     identity,
     externalBusy: d.busy || !!writeFlow,
     operationLock,
@@ -126,8 +111,8 @@ export function NativeApp() {
   });
   const profile = host.profile;
   const labels = host.labels;
-  const locked = permissionChecking || d.busy || !!writeFlow || host.blocked;
-  const editable = !locked && !!d.snapshot && d.writable;
+  const locked = macros.busy || macros.status.running || permissionChecking || d.busy || !!writeFlow || host.blocked;
+  const editable = !macroMode && !savedMacro && !locked && !!d.snapshot && d.writable;
   const name = (index: number) => gestureName(index, labels);
 
   useEffect(() => {
@@ -146,15 +131,6 @@ export function NativeApp() {
       delete document.documentElement.dataset.theme;
     };
   }, [theme]);
-  // Capture ends whenever editing becomes impossible. Gesture and view changes end it in their
-  // handlers, so a late effect from an earlier render can never cancel a capture just started.
-  useEffect(() => {
-    if (editable) return;
-    setCapturing(false);
-    setLive("");
-    held.current = [];
-    heldMask.current = 0;
-  }, [editable]);
   useEffect(() => {
     if (!menuOpen) return;
     const close = (event: MouseEvent) => {
@@ -171,6 +147,8 @@ export function NativeApp() {
   };
   const changed = GESTURE_IDS.filter((index) => changeOf(index));
   const bound = (index: number) => profile.some((b) => b.index === index);
+  const macroFor = (index: number) => macros.profile.find(b => b.index === index)?.macro;
+  const hostCount = new Set([...profile.map(b => b.index), ...macros.profile.map(b => b.index)]).size;
   const valueOf = (index: number) => {
     const draft = changeOf(index);
     return draft ? draftLabel(index, draft, shown) : currentLabel(index, shown, profile);
@@ -205,20 +183,6 @@ export function NativeApp() {
     });
   }
   const editorBase = () => drafts[sel] ?? baseDraft(sel, shown, profile);
-  const fixedKey = (draft: Draft) => isDefaultDraft(draft) || isWindowsOnlyDraft(draft);
-  function toggleModifier(bit: number) {
-    const base = editorBase();
-    if (!editable || fixedKey(base)) return;
-    setDraft(sel, { codes: base.codes, mask: base.mask ^ bit });
-    setHint("");
-  }
-  function pickKey(code: string) {
-    if (!editable || !code) return;
-    const base = editorBase();
-    const keepMask = code !== "WindowsOnly" && !fixedKey(base);
-    setDraft(sel, { codes: [code], mask: keepMask ? base.mask : 0 });
-    setHint("");
-  }
   function applyDefault() {
     if (!editable) return;
     const target = defaultTargetFor(sel, shown);
@@ -234,65 +198,7 @@ export function NativeApp() {
     setHint("");
   }
 
-  // ---- key capture (local, opt-in) ---------------------------------------
-  function startCapture() {
-    if (!editable) return;
-    held.current = [];
-    heldMask.current = 0;
-    setCapturing(true);
-    setLive("");
-    setHint("");
-  }
-  function stopCapture() {
-    setCapturing(false);
-    setLive("");
-    held.current = [];
-    heldMask.current = 0;
-  }
-  function captureDown(event: ReactKeyboardEvent) {
-    if (!capturing || event.repeat) return;
-    if (event.key === "Tab") {
-      stopCapture();
-      return;
-    }
-    event.preventDefault();
-    if (event.key === "Escape") {
-      stopCapture();
-      setHint("記録を取り消しました。");
-      return;
-    }
-    heldMask.current |= eventMask(event);
-    if (!MODIFIER_KEYS.includes(event.key)) {
-      const key = deviceKeys.find(
-        (item) => item.code === event.code && item.code !== "WindowsOnly",
-      );
-      if (!key) setHint("このキーは「その他のキー」から選んでください。");
-      else if (
-        !held.current.includes(key.code) &&
-        held.current.length < MAX_CHORD_KEYS
-      )
-        held.current = [...held.current, key.code];
-    }
-    setLive(
-      held.current.length
-        ? receivedLabel(heldMask.current, held.current)
-        : heldMask.current
-          ? `${receivedLabel(heldMask.current, [])} + …`
-          : "",
-    );
-  }
-  function captureUp(event: ReactKeyboardEvent) {
-    if (!capturing || !held.current.length) return;
-    event.preventDefault();
-    const next = { codes: [...held.current], mask: heldMask.current };
-    stopCapture();
-    setDraft(sel, next);
-    setHint(
-      next.codes.length >= 2
-        ? "同時押しを記録しました。保存するとアプリ経由で動きます。"
-        : "記録しました。まだ本体には保存していません。",
-    );
-  }
+  function stopCapture() { setCapturing(false); setCaptureReset(n => n + 1); }
 
   // ---- device read --------------------------------------------------------
   async function readDevice() {
@@ -584,7 +490,7 @@ export function NativeApp() {
   // ---- test --------------------------------------------------------------
   const sending = host.active && !host.observing;
   const expectedFor = (index: number) =>
-    sending && bound(index)
+    sending && macroFor(index) ? "マクロ（手順ごとの結果を確認）" : sending && bound(index)
       ? currentLabel(index, shown, profile)
       : deviceLabel(index, shown);
   function testDown(event: ReactKeyboardEvent) {
@@ -601,7 +507,7 @@ export function NativeApp() {
     testHeld.current = [];
     testMask.current = 0;
     const want = expectedFor(sel);
-    const keyExpected = (sending && bound(sel)) || deviceIsKey(sel, shown);
+    const keyExpected = !macroFor(sel) && ((sending && bound(sel)) || deviceIsKey(sel, shown));
     setHistory((list) =>
       [
         {
@@ -899,7 +805,7 @@ export function NativeApp() {
                 <span className="nx-tile">
                   <GestureIcon kind={gestureIcon(index, labels)} size={18} />
                 </span>
-                <span className="nx-row-name">{name(index)}</span>
+                <span className="nx-row-name">{name(index)} {macroFor(index) && <span className="nx-badge">マクロ {macroFor(index)!.steps.length}</span>}</span>
                 <span
                   className={`nx-row-value nx-mono ${draft ? "is-changed" : app ? "is-app" : ""}`}
                 >
@@ -938,8 +844,8 @@ export function NativeApp() {
         </span>
       </div>
       <p className="nx-meta">
-        {profile.length
-          ? `${profile.map((b) => name(b.index)).join("・")} の ${profile.length} 件は、送信中だけ動きます。`
+        {hostCount
+          ? `${Array.from(new Set([...profile.map(b => b.index), ...macros.profile.map(b => b.index)])).map(name).join("・")} の ${hostCount} 件は、送信中だけ動きます。`
           : "アプリ経由の割り当てはありません。同時押しを割り当てると使えます。"}
       </p>
       {host.permissionNotice && <p role="status" className="nx-meta">{host.permissionNotice}</p>}
@@ -970,12 +876,12 @@ export function NativeApp() {
           <button
             type="button"
             className="nx-btn nx-btn-block"
-            disabled={locked || !d.snapshot || !profile.length}
+            disabled={locked || !d.snapshot || !hostCount}
             onClick={() => void host.start(d.snapshot, profile)}
           >
             送信を開始
           </button>
-          {profile.length > 0 && !d.snapshot && !locked && (
+          {hostCount > 0 && !d.snapshot && !locked && (
             <p className="nx-meta">本体を読み直すと開始できます。</p>
           )}
         </>
@@ -1004,11 +910,6 @@ export function NativeApp() {
     !draft &&
     defaultTarget.every((value, i) => value === map[i]);
   const note = unverifiedNote(sel, labels);
-  const otherValue =
-    base.codes.length === 1 && !COMMON_KEYS.includes(base.codes[0]) && !isDefaultDraft(base)
-      ? base.codes[0]
-      : "";
-
   const editor = (
     <section className="nx-card nx-editor" aria-label="割り当ての編集">
       <div className="nx-editor-head">
@@ -1068,6 +969,24 @@ export function NativeApp() {
         </p>
       )}
 
+      <div className="nx-macro-mode" role="group" aria-label="割り当ての種類">
+        <button type="button" className="nx-btn" aria-pressed={!macroMode} disabled={locked} onClick={() => { stopCapture(); setMacroModes(m => ({ ...m, [sel]: false })); }}>キー送信</button>
+        <button type="button" className="nx-btn" aria-pressed={macroMode} disabled={locked} onClick={() => { stopCapture(); setMacroModes(m => ({ ...m, [sel]: true })); setMacroInspect(true); }}>マクロ</button>
+      </div>
+      {macros.notice && <p className="nx-meta" role="status">{macros.notice}</p>}
+      {!macroMode && savedMacro && <div className="nx-lock"><span>保存済みマクロが優先されます。キー割り当てに戻すには解除してください。</span><button type="button" className="nx-btn" disabled={locked || !macros.known} onClick={() => macros.save(sel, null)}>マクロを解除（このPCのみ）</button></div>}
+      {macroMode ? <MacroEditor
+        value={macroValue}
+        onChange={value => setMacroDrafts(m => ({ ...m, [sel]: value }))}
+        onSave={() => { if (macros.save(sel, macroValue)) setMacroDrafts(m => { const next = { ...m }; delete next[sel]; return next; }); }}
+        onTest={() => { setMacroInspect(true); void appConfirm.ask("本体を操作せず、このマクロを一度だけ試します。対象アプリを開いたり、前面アプリへキーを送ります。準備できていますか？").then(ok => { if (ok) void macros.test(macroValue); }); }}
+        onStop={() => void macros.stop()}
+        disabled={locked || !identity || !macros.known}
+        running={macros.status.running}
+        supported={mac}
+        dirty={JSON.stringify(macroValue) !== JSON.stringify(savedMacro)}
+        status={macros.status.error ?? (macros.status.running ? `手順 ${macros.status.step ?? 0} を実行中` : "")}
+      /> : <>
       <div className="nx-block">
         <h2 className="nx-eyebrow">割り当て</h2>
         <div
@@ -1154,99 +1073,9 @@ export function NativeApp() {
         )}
       </div>
 
-      <div className="nx-block">
-        <h2 className="nx-eyebrow">変更する</h2>
-        <div className="nx-field nx-field-top">
-          <span className="nx-label">キー入力</span>
-          <div className="nx-field-body">
-            <button
-              type="button"
-              className="nx-input-zone"
-              aria-pressed={capturing}
-              disabled={!editable}
-              onClick={(event) => {
-                event.currentTarget.focus();
-                startCapture();
-              }}
-              onBlur={stopCapture}
-              onKeyDown={captureDown}
-              onKeyUp={captureUp}
-            >
-              <KeyboardIcon />
-              <span>
-                {capturing
-                  ? live
-                    ? `${live} … キーを離すと確定`
-                    : "キーを押してください（同時押しもできます・Esc で取り消し）"
-                  : "ここをクリックして、割り当てたいキーを押す"}
-              </span>
-            </button>
-            <p className="nx-meta" role="status">
-              {hint ||
-                "同時押しもそのまま記録できます。通常キーが2つ以上になると、アプリ経由で動きます。"}
-            </p>
-          </div>
-        </div>
-        <div className="nx-field">
-          <span className="nx-label" id="nx-mods-label">
-            修飾キー
-          </span>
-          <div className="nx-chips" role="group" aria-labelledby="nx-mods-label">
-            {modifierChips.map(([bit, label]) => (
-              <button
-                key={bit}
-                type="button"
-                className="nx-chip"
-                aria-pressed={!!(base.mask & bit) && !fixedKey(base)}
-                disabled={!editable || fixedKey(base)}
-                onClick={() => toggleModifier(bit)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="nx-field">
-          <span className="nx-label" id="nx-common-label">
-            よく使うキー
-          </span>
-          <div className="nx-chips" role="group" aria-labelledby="nx-common-label">
-            {COMMON_KEYS.map((code) => (
-              <button
-                key={code}
-                type="button"
-                className="nx-chip"
-                aria-pressed={base.codes.includes(code)}
-                disabled={!editable}
-                onClick={() => pickKey(code)}
-              >
-                {keyLabelOf(code)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="nx-field">
-          <label className="nx-label" htmlFor="nx-other-key">
-            その他のキー
-          </label>
-          <select
-            id="nx-other-key"
-            className="nx-select"
-            value={otherValue}
-            disabled={!editable}
-            onChange={(event) => pickKey(event.target.value)}
-          >
-            <option value="">一覧から選ぶ</option>
-            {deviceKeys
-              .filter((key) => !COMMON_KEYS.includes(key.code))
-              .map((key) => (
-                <option key={key.code} value={key.code}>
-                  {key.label}
-                </option>
-              ))}
-          </select>
-        </div>
-      </div>
+      <KeyBindingEditor value={base} onChange={next => setDraft(sel, next)} editable={editable}
+        onCaptureChange={setCapturing} resetKey={captureReset} hint={hint} onHintChange={setHint} />
+      </>}
     </section>
   );
 
@@ -1599,14 +1428,6 @@ function GestureIcon({ kind, size }: { kind: GestureIconKind; size: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" className="nx-stroke">
       {body}
-    </svg>
-  );
-}
-function KeyboardIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" className="nx-stroke">
-      <rect x="2" y="6" width="20" height="12" rx="2" />
-      <path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" />
     </svg>
   );
 }

@@ -180,7 +180,7 @@ fn run_worker(_: serde_json::Value, _: &tauri::AppHandle, _: Option<&std::path::
 #[tauri::command]
 pub async fn device_read_snapshot(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<Snapshot, String> {
     check_window(&window)?;
-    let operation = DeviceOperation::new(&app);
+    let operation = {let _gate=crate::macros::ACTIVITY_GATE.lock().map_err(|_|"Activity gate unavailable")?;if crate::macros::is_running(&app){return Err("Stop the macro before device operations".into())}DeviceOperation::new(&app)};
     tauri::async_runtime::spawn_blocking(move || {
         let _operation = operation;
         let state=app.state::<DeviceState>();
@@ -198,7 +198,7 @@ pub async fn device_read_snapshot(window: tauri::WebviewWindow, app: tauri::AppH
 pub async fn device_apply_map(window: tauri::WebviewWindow, app: tauri::AppHandle, request: ApplyRequest) -> Result<Snapshot, String> {
     check_window(&window)?;
     validate_apply_map(request.index, &request.target).map_err(str::to_owned)?;
-    let operation = DeviceOperation::new(&app);
+    let operation = {let _gate=crate::macros::ACTIVITY_GATE.lock().map_err(|_|"Activity gate unavailable")?;if crate::macros::is_running(&app){return Err("Stop the macro before device operations".into())}DeviceOperation::new(&app)};
     tauri::async_runtime::spawn_blocking(move || {
         let _operation = operation;
         let state=app.state::<DeviceState>();
@@ -324,7 +324,7 @@ pub async fn device_apply_batch(window: tauri::WebviewWindow, app: tauri::AppHan
     let state=app.state::<DeviceState>();
     state.2.compare_exchange(0,1,Ordering::SeqCst,Ordering::SeqCst).map_err(|_| "Another batch is running")?;
     let batch=BatchOperation(state.2.clone());
-    let operation=DeviceOperation::new(&app);
+    let operation={let _gate=crate::macros::ACTIVITY_GATE.lock().map_err(|_|"Activity gate unavailable")?;if crate::macros::is_running(&app){return Err("Stop the macro before device operations".into())}DeviceOperation::new(&app)};
     tauri::async_runtime::spawn_blocking(move || {
         let _batch=batch; let _operation=operation;
         if crate::host::is_active(&app) {return Err("Stop the host session before applying a batch".into());}
@@ -372,7 +372,7 @@ pub async fn device_apply_batch(window: tauri::WebviewWindow, app: tauri::AppHan
 #[tauri::command]
 pub async fn device_restore_previous(window: tauri::WebviewWindow, app: tauri::AppHandle, snapshot_id: String) -> Result<Snapshot, String> {
     check_window(&window)?;
-    let operation = DeviceOperation::new(&app);
+    let operation = {let _gate=crate::macros::ACTIVITY_GATE.lock().map_err(|_|"Activity gate unavailable")?;if crate::macros::is_running(&app){return Err("Stop the macro before device operations".into())}DeviceOperation::new(&app)};
     tauri::async_runtime::spawn_blocking(move || {
         let _operation = operation;
         let state=app.state::<DeviceState>();

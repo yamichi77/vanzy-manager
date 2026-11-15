@@ -51,7 +51,7 @@ beforeEach(() => {
     configurable: true,
   });
   api.invoke.mockImplementation(async (command) =>
-    command === "host_status" ? stopped : command === "host_input_permission" ? false : before,
+    command === "macro_status" ? { running: false, step: null, error: null } : command === "host_status" ? stopped : command === "host_input_permission" ? false : before,
   );
 });
 afterEach(() => {
@@ -914,7 +914,7 @@ it("Mac checks permission on Read, continues when denied, and only sends after e
   let granted = false;
   vi.spyOn(window, "confirm").mockReturnValue(true);
   localStorage.setItem(profileKey, JSON.stringify([{ index: 1, keys: [4, 5], modifiers: 0 }]));
-  api.invoke.mockImplementation(async (command) => command === "host_status" ? stopped : command === "host_input_permission" ? granted : before);
+  api.invoke.mockImplementation(async (command) => command === "macro_status" ? { running: false, step: null, error: null } : command === "host_status" ? stopped : command === "host_input_permission" ? granted : before);
   render(<NativeApp />);
   await waitFor(() => expect(api.invoke).toHaveBeenCalledWith("host_status"));
   expect(calls("host_input_permission")).toHaveLength(0);
@@ -1004,4 +1004,52 @@ it("Mac confirmation cancellation never starts or writes, without window.confirm
   expect(calls("host_start")).toHaveLength(0);
   expect(batchCalls()).toHaveLength(0);
   expect(nativeConfirm).not.toHaveBeenCalled();
+});
+
+it("keeps macro editing local and preserves the existing chord profile", async () => {
+  const original = [{ index: 1, keys: [4, 5], modifiers: 0 }];
+  localStorage.setItem(profileKey, JSON.stringify(original));
+  render(<NativeApp />);
+  await read();
+  fireEvent.click(screen.getByRole("button", { name: /^マクロ$/ }));
+  expect(screen.queryByLabelText("その他のキー")).not.toBeInTheDocument();
+  expect(localStorage.getItem(profileKey)).toBe(JSON.stringify(original));
+  expect(batchCalls()).toHaveLength(0);
+  expect(calls("host_start")).toHaveLength(0);
+});
+
+it("shows a saved macro badge and restores original key behavior when disabled locally", async () => {
+  const original = [{ index: 1, keys: [4, 5], modifiers: 0 }];
+  localStorage.setItem(profileKey, JSON.stringify(original));
+  const macroKey = "vanzy-host-macros:v1:device:false";
+  localStorage.setItem(macroKey, JSON.stringify([{ index: 1, macro: { version: 1, steps: [{ type: "wait", ms: 100 }] } }]));
+  render(<NativeApp />);
+  await read();
+  expect(await screen.findByText("マクロ 1")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^キー送信$/ }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "マクロを解除（このPCのみ）" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "マクロを解除（このPCのみ）" }));
+  expect(localStorage.getItem(macroKey)).toBe("[]");
+  expect(localStorage.getItem(profileKey)).toBe(JSON.stringify(original));
+  expect(batchCalls()).toHaveLength(0);
+  expect(calls("host_start")).toHaveLength(0);
+});
+
+it("appends a macro key using the same capture controls and saves only the macro profile", async () => {
+  const original = [{ index: 1, keys: [4,5], modifiers: 0 }];
+  localStorage.setItem(profileKey, JSON.stringify(original));
+  render(<NativeApp />);
+  await read();
+  fireEvent.click(screen.getByRole("button", { name: /^マクロ$/ }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "＋キー送信" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "＋キー送信" }));
+  chord("KeyA", "KeyB");
+  expect(screen.getByRole("group", { name: "修飾キー" })).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "よく使うキー" })).toBeInTheDocument();
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "PC内に保存" }));
+  expect(JSON.parse(localStorage.getItem("vanzy-host-macros:v1:device:false")!)[0].macro.steps[0]).toEqual({ type: "key", keys: [4,5], modifiers: 0 });
+  expect(localStorage.getItem(profileKey)).toBe(JSON.stringify(original));
+  expect(batchCalls()).toHaveLength(0);
+  expect(calls("host_start")).toHaveLength(0);
 });

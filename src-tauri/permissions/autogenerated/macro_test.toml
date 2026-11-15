@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-macro-test"
+description = "Enables the macro_test command without any pre-configured scope."
+commands.allow = ["macro_test"]
+
+[[permission]]
+identifier = "deny-macro-test"
+description = "Denies the macro_test command without any pre-configured scope."
+commands.deny = ["macro_test"]

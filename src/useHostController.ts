@@ -7,6 +7,8 @@ import type { MutableRefObject } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { DeviceSnapshot } from "./DevicePanel";
 import type { HostBinding, HostStatus } from "./HostPanel";
+import type { MacroBinding } from "./useMacroProfile";
+import { validMacroProfile } from "./useMacroProfile";
 
 export const PHYSICAL_NAMES = [
   "左",
@@ -75,6 +77,7 @@ const validProfile = (raw: unknown): raw is HostBinding[] =>
 type Options = {
   /** `${deviceId}:${touchInverted}` of the last verified read, kept while sending. */
   identity: string;
+  macros?: MacroBinding[];
   externalBusy: boolean;
   operationLock: MutableRefObject<boolean>;
   onInvalidate: () => void;
@@ -83,6 +86,7 @@ type Options = {
 
 export function useHostController({
   identity,
+  macros = [],
   externalBusy,
   operationLock,
   onInvalidate,
@@ -284,14 +288,14 @@ export function useHostController({
     const available = fromSave
       ? native && !lock.current && !operationLock.current
       : free();
-    if (!available || !snapshot || blocked || !bindings.length) return false;
-    if (!observe && !validProfile(bindings)) return false;
+    if (!available || !snapshot || blocked || (!bindings.length && !macros.length)) return false;
+    if (!observe && (!validProfile(bindings) || !validMacroProfile(macros))) return false;
     if (
       confirm &&
       !(await ask(
         observe
           ? "名前合わせのため、11操作を一時的に通知用へ切り替えます。キーは送りません。終了すると元に戻します。始めますか？"
-          : `${bindings.length}件の動きを一時的に通知用へ切り替え、このアプリが同時押しをPCへ送ります。アプリを開いている間だけ動き、停止すると元に戻します。開始しますか？`,
+          : `${new Set([...bindings.map(b => b.index), ...macros.map(b => b.index)]).size}件の動きを一時的に通知用へ切り替え、このアプリがキーまたは保存済みマクロをPCで実行します。アプリを開いている間だけ動き、停止すると元に戻します。開始しますか？`,
       ))
     )
       return false;
@@ -318,6 +322,7 @@ export function useHostController({
           ? bindings.map((b) => ({ index: b.index, keys: [], modifiers: 0 }))
           : bindings,
         observeOnly: observe,
+        ...(observe || !macros.length ? {} : { macros }),
       }),
     );
     return !!next;

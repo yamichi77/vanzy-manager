@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-macro-status"
+description = "Enables the macro_status command without any pre-configured scope."
+commands.allow = ["macro_status"]
+
+[[permission]]
+identifier = "deny-macro-status"
+description = "Denies the macro_status command without any pre-configured scope."
+commands.deny = ["macro_status"]

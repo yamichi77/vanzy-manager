@@ -27,6 +27,7 @@ test("only the local main webview has explicit application permissions", () => {
     "allow-device-cancel-batch",
     "allow-device-restore-previous",
     "allow-host-start", "allow-host-stop", "allow-host-status", "allow-host-recover", "allow-host-input-permission",
+    "allow-macro-test", "allow-macro-status", "allow-macro-cancel",
   ]);
 });
 
@@ -158,7 +159,7 @@ test("close and exit retain native readback or restoration in progress", async (
   assert.equal((source.match(/device::is_busy/g) || []).length, 2);
   assert.match(source, /api\.prevent_exit\(\)/);
   const device = (await read("src-tauri/src/device.rs")).split("#[cfg(test)]")[0];
-  assert.equal((device.match(/let operation = DeviceOperation::new/g) || []).length, 3);
+  assert.equal((device.match(/let operation = \{let _gate=crate::macros::ACTIVITY_GATE/g) || []).length, 3);
   assert.equal((device.match(/let _operation = operation/g) || []).length, 3);
 });
 
@@ -190,4 +191,24 @@ test("macOS permission request remains separate from device writes and key emiss
   assert.match(input, /if !request \{ return Ok\(AXIsProcessTrusted\(\) != 0\); \}/);
   assert.match(input, /AXIsProcessTrustedWithOptions\(dictionary\.0\)/);
   assert.ok(host.indexOf("host_input::ensure_input_permission()?") < host.indexOf("let mut child=worker_command"));
+});
+
+
+test("macro IPC is host-only, bounded and cancels on session exit", async () => {
+  const macro = await read("src-tauri/src/macros.rs");
+  const host = await read("src-tauri/src/host.rs");
+  const source = await read("src-tauri/src/lib.rs");
+  assert.match(macro, /if status.running\{return Ok\(\(\)\)\}/);
+  assert.match(macro, /ACTIVITY_GATE/);
+  assert.match(macro, /target_app.as_ref\(\).is_some_and/);
+  assert.doesNotMatch(macro, /Keys after URL navigation are unsupported/);
+  assert.match(macro, /Macro keys cannot target VANZY Manager/);
+  assert.match(macro, /Test keys require an explicit non-Manager application target/);
+  assert.match(macro, /Duration::from_secs\(60\)/);
+  assert.doesNotMatch(macro, /Command::new\("(?:sh|bash|zsh|powershell|osascript)"\)/);
+  assert.match(host, /HOST_END.*crate::macros::cancel/);
+  assert.equal((source.match(/macros::cancel\(/g) || []).length, 2);
+  assert.equal((source.match(/\|\| macros::is_running\(/g) || []).length, 2);
+  assert.match(host, /pub fn request_stop[^\n]+ACTIVITY_GATE[^\n]+macros::cancel/);
+  assert.match(host, /let result=\{[\s\S]+ACTIVITY_GATE[\s\S]+s.phase=="listening"[\s\S]+macros::start/);
 });

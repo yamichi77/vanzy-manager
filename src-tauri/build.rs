@@ -12,7 +12,7 @@ fn main() {
         }
     }
     let manifest = tauri_build::AppManifest::new().commands(&[
-        "host_start", "host_stop", "host_status", "host_recover", "host_input_permission", "device_read_snapshot", "device_apply_map", "device_apply_batch", "device_cancel_batch", "device_restore_previous", "get_runtime_capabilities",
+        "macro_test", "macro_status", "macro_cancel", "host_start", "host_stop", "host_status", "host_recover", "host_input_permission", "device_read_snapshot", "device_apply_map", "device_apply_batch", "device_cancel_batch", "device_restore_previous", "get_runtime_capabilities",
         "request_hardware_operation",
     ]);
 

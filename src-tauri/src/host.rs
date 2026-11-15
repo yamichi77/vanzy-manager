@@ -22,7 +22,7 @@ pub fn host_input_permission(window: tauri::WebviewWindow, request: bool) -> Res
 pub fn host_status(window:tauri::WebviewWindow,app:tauri::AppHandle)->Result<HostStatus,String>{check(&window)?;let state=app.state::<HostState>();let guard=state.0.lock().map_err(|_|"Host state unavailable")?;match guard.as_ref(){Some(s)=>Ok(s.status.lock().map_err(|_|"Host status unavailable")?.clone()),None=>Ok(HostStatus{phase:"stopped".into(),..Default::default()})}}
 #[tauri::command]
 pub fn host_stop(window:tauri::WebviewWindow,app:tauri::AppHandle)->Result<HostStatus,String>{check(&window)?;request_stop(&app)?;host_status(window,app)}
-pub fn request_stop(app:&tauri::AppHandle)->Result<(),String>{let state=app.state::<HostState>();let mut guard=state.0.lock().map_err(|_|"Host state unavailable")?;if let Some(s)=guard.as_mut(){if let Some(input)=s.input.as_mut(){let result=input.write_all(b"STOP\n").and_then(|_|input.flush());if let Ok(mut status)=s.status.lock(){status.phase="restoring".into();}result.map_err(|e|e.to_string())?;}}Ok(())}
+pub fn request_stop(app:&tauri::AppHandle)->Result<(),String>{let _macro_gate=crate::macros::ACTIVITY_GATE.lock().map_err(|_|"Activity gate unavailable")?;crate::macros::cancel(app);let state=app.state::<HostState>();let mut guard=state.0.lock().map_err(|_|"Host state unavailable")?;if let Some(s)=guard.as_mut(){if let Some(input)=s.input.as_mut(){let result=input.write_all(b"STOP\n").and_then(|_|input.flush());if let Ok(mut status)=s.status.lock(){status.phase="restoring".into();}result.map_err(|e|e.to_string())?;}}Ok(())}
 pub fn is_active(app:&tauri::AppHandle)->bool {
  let state=app.state::<HostState>();
  let active = match state.0.lock(){
@@ -32,15 +32,22 @@ pub fn is_active(app:&tauri::AppHandle)->bool {
  active
 }
 #[tauri::command]
-pub fn host_start(window:tauri::WebviewWindow,app:tauri::AppHandle,snapshot_id:String,bindings:Vec<HostBinding>,observe_only:Option<bool>)->Result<HostStatus,String>{
+pub fn host_start(window:tauri::WebviewWindow,app:tauri::AppHandle,snapshot_id:String,bindings:Vec<HostBinding>,observe_only:Option<bool>,macros:Option<Vec<crate::macros::MacroBinding>>)->Result<HostStatus,String>{
  check(&window)?;
+ let _macro_gate=crate::macros::ACTIVITY_GATE.lock().map_err(|_|"Activity gate unavailable")?;
+ if crate::macros::is_running(&app){return Err("Stop the macro before host session operations".into())}
  #[cfg(not(any(target_os="windows",target_os="macos")))]{let _=(app,snapshot_id,bindings,observe_only);Err("Windows only".into())}
  #[cfg(any(target_os="windows",target_os="macos"))]{
  let observe_only=observe_only.unwrap_or(false);
+ let macros=macros.unwrap_or_default();
+ if observe_only && !macros.is_empty(){return Err("Observation cannot run macros".into())}
+ if !macros.is_empty(){crate::macros::adapter_supported()?;}
+ let mut macro_ids=std::collections::HashSet::new();for b in &macros{if !(1..=11).contains(&b.index)||!macro_ids.insert(b.index){return Err("Invalid macro gesture".into())}crate::macros::validate(&b.r#macro)?;}
+ let mut bindings=bindings;for b in &macros{if !bindings.iter().any(|v|v.index==b.index){bindings.push(HostBinding{index:b.index,keys:vec![],modifiers:0});}}
  #[cfg(target_os="macos")]
  if !observe_only {host_input::ensure_input_permission()?;}
  if bindings.is_empty()||bindings.len()>11{return Err("Choose one to eleven analyzed gesture slots".into())}
- let mut seen=std::collections::HashSet::new();for b in &bindings{if !(1..=11).contains(&b.index)||!seen.insert(b.index){return Err("Invalid or repeated gesture".into())}if !observe_only {host_input::validate_chord(&b.keys,b.modifiers)?;}}
+ let mut seen=std::collections::HashSet::new();for b in &bindings{if !(1..=11).contains(&b.index)||!seen.insert(b.index){return Err("Invalid or repeated gesture".into())}if !observe_only && !macro_ids.contains(&b.index) {host_input::validate_chord(&b.keys,b.modifiers)?;}}
  let hs=app.state::<HostState>();let mut host=hs.0.lock().map_err(|_|"Host state unavailable")?;
  if host.as_ref().is_some_and(|s|s.status.lock().map(|v|v.active).unwrap_or(true)){return Err("Stop the current host session first".into())}
  let ds=app.state::<DeviceState>();let mut device=ds.0.try_lock().map_err(|_|"Another device operation is running")?;
@@ -62,18 +69,24 @@ pub fn host_start(window:tauri::WebviewWindow,app:tauri::AppHandle,snapshot_id:S
     Some("HOST_MODE")=>{if let Some(mode)=value["runtimeMode"].as_u64().and_then(|x|u8::try_from(x).ok()){if let Ok(mut s)=shared.lock(){s.runtime_mode=Some(mode);s.mode_read_at=value["modeReadAt"].as_str().map(str::to_owned);}}},
     Some("HOST_READY")=>{if let Ok(mut s)=shared.lock(){if s.phase=="starting"{ready=true;s.phase="listening".into();}}},
     Some("HOST_EVENT") if ready=>{
-     if !shared.lock().map(|s|s.phase=="listening").unwrap_or(false){continue;}
+     if !shared.lock().map(|s|s.phase=="listening").unwrap_or(false)||crate::macros::is_running(&app_clone){continue;}
      let Some(id)=value["id"].as_u64().and_then(|x|u8::try_from(x).ok()) else{continue};let Some(binding)=bindings.iter().find(|b|b.index==id)else{continue};
      // Worker owns the exact BLE device and validates the 0xC0 packet before publishing.
-     let result=if observe_only {Ok(())} else {host_input::emit_chord(&binding.keys,binding.modifiers)};
+     let result={
+      // Same gate/order as request_stop: a previously queued notification cannot
+      // reset cancellation after stop has moved the session out of listening.
+      let Ok(_macro_gate)=crate::macros::ACTIVITY_GATE.lock() else {break};
+      if !shared.lock().map(|s|s.phase=="listening").unwrap_or(false)||crate::macros::is_running(&app_clone){continue;}
+      if observe_only {Ok(())} else if let Some(m)=macros.iter().find(|m|m.index==binding.index){crate::macros::start(&app_clone,m.r#macro.clone())} else {host_input::emit_chord(&binding.keys,binding.modifiers)}
+     };
      if let Ok(mut s)=shared.lock(){s.event_count+=1;s.last_gesture=Some(binding.index);s.last_received_at=value["receivedAt"].as_str().map(str::to_owned);if let Err(e)=result {s.error=Some(e);s.phase="input-failed-restoring".into();ready=false;}}
      if !ready {let _=request_stop(&app_clone);}
     },
-    Some("HOST_END")=>{ended=true;ready=false;if let Ok(mut s)=shared.lock(){s.active=false;s.restored=Some(value["restoration"].as_str()==Some("restored")||value["restoration"].as_str()==Some("not-needed"));s.phase=if s.restored==Some(true){"stopped"}else{"restore-failed"}.into();if value["ok"].as_bool()!=Some(true){s.error=Some(format!("{} / restoration: {} / cleanup: {}",value["error"].as_str().unwrap_or("Host session ended"),value["restorationError"].as_str().unwrap_or("none"),value["cleanupErrors"]));}}},
+    Some("HOST_END")=>{crate::macros::cancel(&app_clone);ended=true;ready=false;if let Ok(mut s)=shared.lock(){s.active=false;s.restored=Some(value["restoration"].as_str()==Some("restored")||value["restoration"].as_str()==Some("not-needed"));s.phase=if s.restored==Some(true){"stopped"}else{"restore-failed"}.into();if value["ok"].as_bool()!=Some(true){s.error=Some(format!("{} / restoration: {} / cleanup: {}",value["error"].as_str().unwrap_or("Host session ended"),value["restorationError"].as_str().unwrap_or("none"),value["cleanupErrors"]));}}},
     _=>{}
    }
   }
-  let exit_status=child.wait();let detail=errors.join().unwrap_or_default();if let Ok(mut s)=shared.lock(){s.active=false;if !ended{s.phase="restore-unconfirmed".into();s.restored=None;s.error=Some(format!("Host worker ended without confirmed restoration. Re-read device before any write. Exit: {:?}. {}",exit_status,detail));}}
+  crate::macros::cancel(&app_clone);let exit_status=child.wait();let detail=errors.join().unwrap_or_default();if let Ok(mut s)=shared.lock(){s.active=false;if !ended{s.phase="restore-unconfirmed".into();s.restored=None;s.error=Some(format!("Host worker ended without confirmed restoration. Re-read device before any write. Exit: {:?}. {}",exit_status,detail));}}
  });
  Ok(HostStatus{active:true,phase:"starting".into(),..Default::default()})
  }
@@ -81,6 +94,8 @@ pub fn host_start(window:tauri::WebviewWindow,app:tauri::AppHandle,snapshot_id:S
 #[tauri::command]
 pub fn host_recover(window:tauri::WebviewWindow,app:tauri::AppHandle)->Result<HostStatus,String>{
  check(&window)?;
+ let _macro_gate=crate::macros::ACTIVITY_GATE.lock().map_err(|_|"Activity gate unavailable")?;
+ if crate::macros::is_running(&app){return Err("Stop the macro before host session operations".into())}
  #[cfg(not(any(target_os="windows",target_os="macos")))]{let _=app;Err("Windows only".into())}
  #[cfg(any(target_os="windows",target_os="macos"))]{
  let state=app.state::<HostState>();let mut session=state.0.lock().map_err(|_|"Host state unavailable")?;

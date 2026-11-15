@@ -3,6 +3,7 @@ mod mac_worker;
 mod device;
 mod host;
 mod host_input;
+mod macros;
 mod recovery_guard;
 use serde::Serialize;
 use tauri::{Manager, WebviewWindowBuilder};
@@ -40,6 +41,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(device::DeviceState::default())
         .manage(host::HostState::default())
+        .manage(macros::MacroState::default())
         .setup(|app| {
             // Configuration uses create:false so this navigation guard is
             // installed before the only webview is created.
@@ -66,6 +68,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            macros::macro_test, macros::macro_status, macros::macro_cancel,
             host::host_start, host::host_stop, host::host_status, host::host_recover, host::host_input_permission,
             device::device_read_snapshot,
             device::device_apply_map,
@@ -77,7 +80,8 @@ pub fn run() {
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if device::is_busy(window.app_handle()) || host::is_active(window.app_handle()) {
+                macros::cancel(window.app_handle());
+                if device::is_busy(window.app_handle()) || host::is_active(window.app_handle()) || macros::is_running(window.app_handle()) {
                     // Keep the window visible while readback/restoration completes.
                     // A later explicit close can exit after the result is visible.
                     api.prevent_close();
@@ -91,7 +95,8 @@ pub fn run() {
         .expect("failed to build VANZY Manager")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                if device::is_busy(app) || host::is_active(app) {
+                macros::cancel(app);
+                if device::is_busy(app) || host::is_active(app) || macros::is_running(app) {
                     api.prevent_exit();
                     if host::is_active(app) {
                         let _ = host::request_stop(app);
