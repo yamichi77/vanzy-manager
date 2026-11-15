@@ -1,6 +1,6 @@
 # VANZY Manager
 
-VANZY A2向けの非公式・実験的なWindows / macOS設定ツールです。React / TypeScript / Tauri / Rustで実装しています。メーカーによる公式製品・サポートではありません。
+VANZY A2向けの非公式・実験的なWindows / macOS設定ツールです。React / TypeScript / Tauri / Rustで実装しています。メーカーの公式製品ではなく、公式サポートもありません。
 
 ## 対応と制限
 
@@ -32,7 +32,7 @@ macOS の VANZY A2 / FW 3.2.1 を対象とした限定的な実機検証で、�
 
 ## 開発
 
-Node.js 22.12以上、Rust stable、各OSのTauri 2ビルド前提（Windows: MSVC C++ Build Tools / WebView2、macOS: Xcode Command Line Tools）が必要です。
+Node.js 22.12以上、Rust stable、各OSでTauri 2をビルドするための環境（Windows: MSVC C++ Build Tools / WebView2、macOS: Xcode Command Line Tools）が必要です。
 
 ```sh
 npm ci
@@ -113,74 +113,36 @@ node scripts/sign-macos-local.mjs \
 キーチェーンが署名鍵の使用確認を表示した場合は本人が認証してください。
 自己署名は Developer ID 署名・公証ではなく、他の人向けバイナリ配布用ではありません。
 
-### Host-only macros (experimental)
+### PC内で実行するマクロ
 
-The native assignment screen retains the existing key editor. Selecting **マクロ**
-opens an ordered step editor for that gesture: key tap/chord, bounded delay,
-application launch/activation with a frontmost timeout, and URL opening in an
-explicit application on macOS, or the registered OS URL handler on Windows. **PC内に保存** stores a separate local profile; it does not
-write firmware or device mappings. Removing a macro restores the unchanged
-original key assignment. During an explicitly started host session the macro
-replaces that gesture's normal host output.
+このマクロ機能は実験的なものです。ネイティブ版の割り当て画面では既存のキーエディターを引き続き使えます。「マクロ」を選ぶと、そのジェスチャーで実行する手順を順番に編集できます。設定できるのは、キーのタップや同時押し、上限付きの待機、最前面になるまでの待機上限を指定したアプリの起動・アクティブ化、URLを開く操作です。URLはmacOSでは指定アプリで、WindowsではOSに登録されたアプリで開きます。「PC内に保存」は専用のローカルプロファイルに保存する操作で、ファームウェアや本体のキー割り当ては書き換えません。マクロを解除すると、変更せずに残していた元のキー割り当てに戻ります。明示的にホスト送信を開始している間は、そのジェスチャーの通常のホスト出力に代わってマクロが実行されます。
 
-Macros run once, sequentially. Additional gestures while one runs are dropped,
-not queued. Stop, disconnect, or a timeout cancels further steps without retry.
-Key chords release their own keys before continuing. Each key step can optionally
-require a specific application to be frontmost immediately before sending; a
-mismatch stops the macro with a reason. Without that optional condition, a key
-step sends normally to the current foreground app. Delays do not lock focus.
-URL → delay → key sequences are supported, without a mandatory inherited target.
-Application/URL opening still waits for its specified target with a bounded
-timeout and rejects unexpected foreground transitions during that opening step.
+マクロは順番に1回だけ実行します。実行中に届いた追加のジェスチャーは破棄し、待ち行列には入れません。停止、切断、タイムアウトが起きると後続の手順を中止し、再試行しません。同時押しでは送信したキーをすべて離してから次の手順へ進みます。キー送信の手順には、送信直前に特定のアプリが最前面にあることを条件として任意で設定できます。一致しなければ理由を表示して停止し、条件を設定しなければ、その時点で最前面のアプリへ通常どおり送信します。待機中もフォーカスは固定しません。「URLを開く→待機→キー送信」のような手順も使え、前の手順の対象アプリを送信条件として引き継ぐことは必須ではありません。アプリやURLを開く手順では、指定アプリが最前面になるまで上限付きで待機し、その途中で予期しないアプリへ切り替わった場合は停止します。
 
-Foreground verification does not prove content, text-field, or microphone
-readiness, and delays are timing choices rather than readiness checks. Test key
-steps require a preceding explicit application or URL opener; macro keys never
-target VANZY Manager itself. No application-specific shortcuts or voice-input
-behavior are built in.
+最前面の確認では画面の内容、入力欄、マイクの準備完了までは分かりません。待機時間の指定も準備完了を確認する処理ではありません。テストでキーを送るには、その前に対象アプリやURLを開く手順が必要です。マクロのキーはVANZY Manager自身には送信しません。特定アプリのショートカットや音声入力の動作は組み込んでいません。
 
-The macOS adapter uses application bundle identifiers. The Windows adapter accepts
-an absolute local EXE path (for example `C:\Program Files\Example\Example.exe`)
-or a registered packaged app identifier prefixed with `aumid:` (for example
-`aumid:Example.Package_abc!App`). These are identifiers, not command lines:
-arguments, relative/UNC/device paths, and loose desktop AppUserModelIDs are not
-accepted. Windows app opening restores an existing matching window when possible;
-foreground activation remains subject to normal Windows restrictions and fails
-safely if the target does not become frontmost. No elevation or focus workaround
-is attempted. Paths are local to each PC; settings are not automatically portable.
+macOS用の実装ではアプリのbundle identifierを使います。Windows用の実装ではローカルEXEの絶対パス（例: `C:\Program Files\Example\Example.exe`）、または先頭に `aumid:` を付けた登録済みパッケージアプリの識別子（例: `aumid:Example.Package_abc!App`）を指定します。これらは識別子であり、コマンドラインではありません。引数、相対パス、UNCパス、デバイスパス、パッケージに属さないデスクトップアプリのAppUserModelIDは受け付けません。Windowsでは、該当するウィンドウが既にあれば可能な範囲で復元します。最前面への切替はWindowsの通常の制限に従い、対象を最前面にできなければ安全に停止します。権限昇格やフォーカス制限の回避は行いません。パスはPCごとのもので、設定は自動的には移行されません。
 
-Windows URL opening uses the OS-registered handler, not an arbitrary EXE argument.
-The registered handler must match the configured application before dispatch;
-unknown or mismatched handlers are refused. Afterwards the runner observes the
-foreground application, not the destination page or input focus. This does not
-establish that any particular ChatGPT, voice-input, or third-party app flow works.
+WindowsでURLを開くときは、任意のEXEに引数を渡すのではなく、OSに登録されたアプリを使います。開く前に登録先と指定アプリが一致することを確認し、登録先が不明な場合や一致しない場合は開きません。その後に確認するのは最前面のアプリであり、開いたページや入力欄のフォーカスではありません。この確認だけでは、ChatGPT、音声入力、その他のアプリを使った個別の操作が動くと検証したことにはなりません。
 
-Existing Windows single-chord behavior is unchanged. No shell/script steps,
-loops, or built-in example URLs are provided. URLs and application identifiers
-stay in local settings and are not included in runner error messages. Do not put
-credentials in URLs.
+既存のWindows向けキー同時押しの送信動作は変更していません。シェルやスクリプトを実行する手順、ループ、組込みのサンプルURLはありません。URLとアプリの識別子はローカル設定に保存し、マクロ実行時のエラーメッセージには含めません。URLに認証情報を入れないでください。
 
-### Windows standalone build
+### Windowsの単体実行ファイルのビルド
 
-From the repository root in PowerShell, build with the Tauri CLI so the frontend
-is built and embedded into the executable:
+PowerShellでリポジトリのルートからTauri CLIを実行し、フロントエンドをビルドして実行ファイルに組み込みます。
 
 ```powershell
 .\node_modules\.bin\tauri.cmd build --no-bundle
 ```
 
-The executable is `src-tauri/target/release/vanzy-manager.exe`. Do not distribute
-an executable produced only by `cargo build --release`: without Tauri's
-`custom-protocol` feature it can try the development URL instead of the embedded
-frontend and show a blank window. Build output and local settings are not source
-artifacts and must not be committed.
+実行ファイルは `src-tauri/target/release/vanzy-manager.exe` です。`cargo build --release` だけで作った実行ファイルは配布しないでください。Tauriの `custom-protocol` 機能がないと、組込みフロントエンドではなく開発用URLに接続しようとして、画面が空白になることがあります。ビルド成果物とローカル設定はソースではないため、コミットしないでください。
 
-### Windows verification limits
+### Windowsでの検証範囲と制限
 
-The opening timeout includes the OS launch request and foreground wait. Cancellation stops later macro steps promptly. An already-dispatched OS request cannot be undone and may still finish; while it remains in flight, new macros are refused, never queued or replayed.
+起動のタイムアウトにはOSへの起動要求と最前面になるまでの待機を含みます。キャンセルすると後続のマクロ手順は速やかに止まります。ただし、既にOSへ送った要求は取り消せず、その後に完了する場合があります。その要求が処理中の間は新しいマクロを受け付けず、待ち行列への追加や再実行もしません。
 
-Executable identity comparison is case-insensitive for ASCII, not path canonicalization. Use the actual long executable path (not a short-name, junction alias or renamed copy). Packaged apps use `aumid:PackageFamily!ApplicationId`; hosted windows whose process does not expose that identity fail closed. These cases do not enable elevation or focus-policy bypasses.
+実行ファイルの識別ではASCIIの大文字・小文字を区別しませんが、パスの正規化は行いません。短い形式のパス、ジャンクション経由の別名、名前を変えたコピーではなく、実際の長い形式のパスを指定してください。パッケージアプリには `aumid:PackageFamily!ApplicationId` を使います。ウィンドウをホストするプロセスからこの識別子を取得できなければ処理を拒否します。こうした場合も権限昇格やフォーカス制限の回避は行いません。
 
-Windows native verification on the main PC: release build and non-interactive unit/contract/UI tests completed. The opt-in neutral window probe was launched successfully, but did not become foreground within its deadline under the tool session; the sequence stopped before sending Tab/Space. Actual key delivery, packaged-app activation, and real URL navigation are therefore not claimed as verified. No ChatGPT, Grok, Muse, microphone or physical-device tests were performed.
+メインPCでのWindowsネイティブ版の検証では、リリースビルドと、対話操作を伴わない単体・契約・UIテストを完了しました。明示的に実行する専用のテストウィンドウは起動できましたが、ツールのセッションでは期限内に最前面にならず、Tab/Spaceを送る前に停止しました。そのため、実際のキー到達、パッケージアプリのアクティブ化、実際のURL遷移は検証済みとしていません。ChatGPT、Grok、Muse、マイク、実機を使ったテストは行っていません。
 
-The neutral, auto-closing probe source is `tests/native/WindowsMacroProbe.cs`. Compile it as `vanzy-macro-probe.exe` with the .NET Framework C# compiler and Windows Forms references. The ignored Rust test `macros::native_probe::isolated_windows_launch_and_key_delivery` requires `VANZY_MACRO_PROBE_EXE` and a fresh `VANZY_MACRO_PROBE_REPORT` path. It deliberately requires an interactive foreground; it never weakens Windows focus restrictions to make a test pass.
+自動で閉じる専用テストウィンドウのソースは `tests/native/WindowsMacroProbe.cs` です。.NET FrameworkのC#コンパイラーとWindows Formsの参照を使い、`vanzy-macro-probe.exe` としてコンパイルしてください。通常はスキップされるRustテスト `macros::native_probe::isolated_windows_launch_and_key_delivery` には、`VANZY_MACRO_PROBE_EXE` と、新しい `VANZY_MACRO_PROBE_REPORT` のパスが必要です。このテストは意図的に対話操作可能な最前面のウィンドウを必要とし、テストを通すためにWindowsのフォーカス制限を緩めることはありません。
